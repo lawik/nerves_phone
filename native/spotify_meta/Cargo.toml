@@ -1,0 +1,16 @@
+[package]
+name = "spotify-meta"
+version = "0.1.0"
+edition = "2021"
+description = "Prints a Spotify playlist's tracks as JSON, using librespot's session"
+publish = false
+
+[dependencies]
+librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-metadata = { version = "=0.8.0", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures-util = "0.3"
+serde_json = "1"
+
+[profile.release]
+strip = true

@@ -1,0 +1,14 @@
+#!/bin/sh
+# Bundlex creates static libraries with a plain `ar rcs`. On a macOS build
+# host that's Apple's ar, which silently drops the target's ELF objects and
+# leaves an empty archive, so NIFs link with unresolved symbols. mix.exs puts
+# this directory first on PATH for target builds, so `ar` is the Nerves
+# toolchain's when cross-compiling.
+if [ -n "$CROSSCOMPILE" ]; then
+  exec "$CROSSCOMPILE-ar" "$@"
+fi
+
+# Not cross-compiling: the next ar on PATH.
+self_dir=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$self_dir" | paste -sd: -)
+exec ar "$@"
