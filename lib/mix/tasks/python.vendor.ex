@@ -32,14 +32,16 @@ defmodule Mix.Tasks.Python.Vendor do
     * `PyYAML`, for svtplay-dl's settings files
     * `yt-dlp`
     * `yt-dlp-ejs`, the JavaScript yt-dlp runs to solve YouTube's
-      challenges. It needs a JS runtime (deno, node, bun or QuickJS) on the
-      PATH; without one, YouTube only offers some formats.
+      challenges, and QuickJS-ng (`qjs`, a static build of a couple of MB)
+      to run it. Without a JS runtime, YouTube offers fewer formats, and
+      some videos (such as ones made for kids) not at all.
   """
 
   use Mix.Task
 
   @pypi "https://files.pythonhosted.org/packages"
   @pbs "https://github.com/astral-sh/python-build-standalone/releases/download/20261003"
+  @quickjs "https://github.com/quickjs-ng/quickjs/releases/download/v0.17.0"
 
   @svtplay_dl {"svtplay_dl-4.199.tar.gz",
                "#{@pypi}/35/ed/7c28095881f133289284ca75c53ee64cb2e71f900e44b7da7acdfeba9f5b/svtplay_dl-4.199.tar.gz",
@@ -78,6 +80,9 @@ defmodule Mix.Tasks.Python.Vendor do
   # The phone (aarch64 glibc Linux) and an Apple Silicon Mac for the host.
   @platforms %{
     "aarch64-linux" => %{
+      qjs:
+        {"qjs-linux-aarch64", "#{@quickjs}/qjs-linux-aarch64",
+         "3372133484edf50a69f3c67903af41206d22a061e930e3cfb63269272ef56d2e"},
       python:
         {"cpython-3.13.16+20261003-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
          "#{@pbs}/cpython-3.13.16%2B20261003-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
@@ -95,6 +100,9 @@ defmodule Mix.Tasks.Python.Vendor do
       ]
     },
     "aarch64-darwin" => %{
+      qjs:
+        {"qjs-darwin-arm64", "#{@quickjs}/qjs-darwin-arm64",
+         "8be3ddfe3397d2e692e4e1e8972ee9d032a0a580505d2f8b4ea528cf1b651c11"},
       python:
         {"cpython-3.13.16+20261003-aarch64-apple-darwin-install_only_stripped.tar.gz",
          "#{@pbs}/cpython-3.13.16%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz",
@@ -137,7 +145,7 @@ defmodule Mix.Tasks.Python.Vendor do
   @impl Mix.Task
   def run(_args) do
     platform = platform(Mix.target())
-    %{python: python, wheels: wheels} = Map.fetch!(@platforms, platform)
+    %{python: python, wheels: wheels, qjs: qjs} = Map.fetch!(@platforms, platform)
 
     dest = dest()
     File.rm_rf!(dest)
@@ -163,6 +171,11 @@ defmodule Mix.Tasks.Python.Vendor do
     :ok = :erl_tar.extract(archive, [:compressed, files: keep, cwd: String.to_charlist(dest)])
 
     trim_stdlib(Path.join(dest, "python"))
+
+    {name, _url, _sha256} = qjs
+    Mix.shell().info("==> Fetching #{name}")
+    File.write!(Path.join(dest, "qjs"), fetch!(qjs))
+    File.chmod!(Path.join(dest, "qjs"), 0o755)
 
     site_packages = Path.join(dest, "site-packages")
     File.mkdir_p!(site_packages)

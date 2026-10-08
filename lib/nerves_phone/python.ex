@@ -34,6 +34,13 @@ defmodule NervesPhone.Python do
   @spec start() :: :ok | {:error, String.t()}
   def start, do: GenServer.call(__MODULE__, :start, :infinity)
 
+  @doc """
+  Where the target's Python, its packages, and the tools that go with
+  them (such as `qjs`, for yt-dlp) are.
+  """
+  @spec dir() :: Path.t()
+  def dir, do: Application.app_dir(:nerves_phone, "priv/python/#{@target}")
+
   @impl GenServer
   def init(_opts), do: {:ok, nil}
 
@@ -46,7 +53,7 @@ defmodule NervesPhone.Python do
   def handle_call(:start, _from, result), do: {:reply, result, result}
 
   defp start_python() do
-    dir = Application.app_dir(:nerves_phone, "priv/python/#{@target}")
+    dir = dir()
     python = Path.join(dir, "python")
 
     with {:ok, libpython} <- libpython(python) do

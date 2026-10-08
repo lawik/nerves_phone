@@ -13,6 +13,12 @@ defmodule NervesPhone.Apps.Videos.State do
   drops the video element and Emerge lets go of the frame it shows; the
   pipeline stops a moment later.
 
+  MP4 and QuickTime files are indexed first (`NervesPhone.Video.MP4`, cached
+  on disk), which gives their duration and lets `:seek` play from any
+  point. Seeking restarts the pipeline at the new time, on the same video
+  target, so the current frame stays up meanwhile; while the scrubber is
+  being dragged, the time shown follows it and the seek waits for a pause.
+
   A new video only starts once the previous pipeline has gone: the sound
   card takes one stream at a time, so the new one couldn't open it while
   the old one still has it. If the old one takes too long, the new one
@@ -20,9 +26,9 @@ defmodule NervesPhone.Apps.Videos.State do
   """
 
   use Solve.Controller,
-    events: [:opened, :rescan, :play, :toggle_pause, :stop, :show, :toggle_controls]
+    events: [:opened, :rescan, :play, :toggle_pause, :stop, :show, :toggle_controls, :seek]
 
-  alias NervesPhone.Video.{Library, Player}
+  alias NervesPhone.Video.{Library, MP4, Player}
 
   # Long enough for the UI to re-render without the video element.
   @stop_delay_ms 300
@@ -30,6 +36,9 @@ defmodule NervesPhone.Apps.Videos.State do
   # fixed set so atoms don't pile up. A target is long gone from the screen
   # by the time its name comes round again.
   @targets for n <- 0..63, do: :"video_#{n}"
+
+  # A seek waits for the scrubber to stop moving this long.
+  @seek_settle_ms 250
 
   # A new video waits at most this long for the previous one to stop.
   @handover_timeout_ms 3_000
@@ -61,7 +70,7 @@ defmodule NervesPhone.Apps.Videos.State do
       folders: state.folders,
       scanning: state.scanning,
       controls: state.controls,
-      playback: state.playback && Map.drop(state.playback, [:pipeline, :monitor])
+      playback: state.playback && Map.drop(state.playback, [:pipeline, :monitor, :index])
     }
   end
 
@@ -83,25 +92,50 @@ defmodule NervesPhone.Apps.Videos.State do
     state = stop_playback(state)
     target = Enum.at(@targets, rem(state.plays, length(@targets)))
 
+    plays = state.plays + 1
+    indexed? = String.downcase(Path.extname(path)) in ~w(.mp4 .m4v .mov)
+
     playback = %{
       path: path,
       name: Path.basename(path),
       target: target,
       status: :starting,
       position_ms: 0,
+      duration_ms: nil,
+      start_ms: 0,
+      seek_gen: 0,
+      seeking: false,
+      # :pending while the file is being indexed; nil for raw H.264.
+      index: if(indexed?, do: :pending, else: nil),
       pipeline: nil,
       monitor: nil
     }
 
-    state = %{show_controls(state) | page: :player, plays: state.plays + 1, playback: playback}
+    if indexed? do
+      controller = self()
 
-    if state.stopping == %{} do
-      start_pipeline(state)
-    else
-      Process.send_after(self(), {:handover_timeout, state.plays}, @handover_timeout_ms)
-      state
+      Task.Supervisor.start_child(NervesPhone.TaskSupervisor, fn ->
+        send(controller, {:indexed, plays, MP4.index(path)})
+      end)
     end
+
+    state = %{show_controls(state) | page: :player, plays: plays, playback: playback}
+    wait_for_handover(state) |> maybe_start()
   end
+
+  # Dragging the scrubber: show the time now, seek once it settles.
+  def seek(ms, %{playback: %{index: %{} = index} = p} = state) when is_number(ms) do
+    ms = ms |> round() |> max(0) |> min(div(index.duration_ns, 1_000_000))
+    gen = p.seek_gen + 1
+    Process.send_after(self(), {:seek_now, gen}, @seek_settle_ms)
+
+    show_controls(%{
+      state
+      | playback: %{p | position_ms: ms, seek_gen: gen, start_ms: ms, seeking: true}
+    })
+  end
+
+  def seek(_ms, state), do: state
 
   def toggle_pause(_payload, %{playback: %{pipeline: pipeline, status: status} = p} = state)
       when pipeline != nil do
@@ -141,10 +175,16 @@ defmodule NervesPhone.Apps.Videos.State do
 
   def handle_info({:scanned, folders}, state), do: %{state | folders: folders, scanning: false}
 
-  def handle_info({:video, message}, %{playback: %{} = playback} = state) do
+  # Only the current pipeline's news counts.
+  def handle_info(
+        {:video, pipeline, message},
+        %{playback: %{pipeline: pipeline} = playback} = state
+      )
+      when pipeline != nil do
     playback =
       case message do
         :playing -> %{playback | status: :playing}
+        {:position, _ms} when playback.seeking -> playback
         {:position, ms} -> %{playback | position_ms: ms}
         :ended -> ended(playback)
         {:error, reason} -> %{playback | status: {:error, reason}}
@@ -154,11 +194,47 @@ defmodule NervesPhone.Apps.Videos.State do
     if message == :playing, do: show_controls(state), else: state
   end
 
+  def handle_info({:indexed, plays, result}, %{plays: plays, playback: %{} = p} = state) do
+    case result do
+      {:ok, index} ->
+        p = %{p | index: index, duration_ms: div(index.duration_ns, 1_000_000)}
+        maybe_start(%{state | playback: p})
+
+      {:error, reason} ->
+        %{state | playback: %{p | index: nil, status: {:error, reason}}}
+    end
+  end
+
+  def handle_info({:indexed, _stale, _result}, state), do: state
+
+  # The scrubber has settled: play from there.
+  def handle_info({:seek_now, gen}, %{playback: %{seek_gen: gen} = p} = state) do
+    p = %{p | seeking: false}
+
+    state =
+      case p do
+        %{pipeline: pipeline, monitor: monitor} when pipeline != nil ->
+          Process.send_after(self(), {:stop_pipeline, pipeline}, 0)
+
+          %{
+            state
+            | stopping: Map.put(state.stopping, monitor, pipeline),
+              playback: %{p | status: :starting, pipeline: nil, monitor: nil}
+          }
+
+        _starting ->
+          %{state | playback: %{p | status: :starting}}
+      end
+
+    state |> wait_for_handover() |> maybe_start()
+  end
+
+  def handle_info({:seek_now, _stale}, state), do: state
+
   # A stopped pipeline has gone; start the video waiting for it.
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{stopping: stopping} = state)
       when is_map_key(stopping, ref) do
-    state = %{state | stopping: Map.delete(stopping, ref)}
-    if state.stopping == %{}, do: start_pipeline(state), else: state
+    maybe_start(%{state | stopping: Map.delete(stopping, ref)})
   end
 
   def handle_info({:handover_timeout, plays}, %{plays: plays} = state),
@@ -203,9 +279,25 @@ defmodule NervesPhone.Apps.Videos.State do
     %{playback | status: :ended}
   end
 
+  defp wait_for_handover(%{stopping: stopping} = state) when stopping == %{}, do: state
+
+  defp wait_for_handover(state) do
+    Process.send_after(self(), {:handover_timeout, state.plays}, @handover_timeout_ms)
+    state
+  end
+
+  # Starts the pipeline once the file is indexed and the last one has gone.
+  defp maybe_start(%{stopping: stopping} = state) when stopping != %{}, do: state
+  defp maybe_start(%{playback: %{index: :pending}} = state), do: state
+  defp maybe_start(state), do: start_pipeline(state)
+
   # Starts the pipeline for a playback waiting to start (once).
+  defp start_pipeline(%{playback: %{index: :pending}} = state), do: state
+
   defp start_pipeline(%{playback: %{status: :starting, pipeline: nil} = p} = state) do
-    case player().start(p.path, self(), p.target) do
+    opts = [index: p.index, start_ms: p.start_ms]
+
+    case player().start(p.path, self(), p.target, opts) do
       {:ok, pipeline} ->
         NervesPhone.Screen.keep_awake(true)
 

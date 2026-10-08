@@ -17,7 +17,7 @@ defmodule NervesPhone.Apps.Videos do
 
   use Emerge.UI
   import NervesPhone.UI.Theme
-  import Solve.Lookup, only: [solve: 2, event: 3]
+  import Solve.Lookup, only: [solve: 2, event: 2, event: 3]
 
   @app NervesPhone.State
 
@@ -195,30 +195,92 @@ defmodule NervesPhone.Apps.Videos do
 
     playing? = playback.status == :playing
 
-    bottom =
-      row([width(fill()), padding_xy(s(12), s(14)), spacing(s(14)), shade.(90)], [
+    buttons =
+      row([width(fill()), spacing(s(14))], [
         overlay_button(
           if(playing?, do: :pause, else: :play),
           event(videos, :toggle_pause, nil),
           56
         ),
-        overlay_button(:stop, event(videos, :stop, nil)),
-        el(
-          [
-            center_y(),
-            width(fill()),
-            Font.size(s(14)),
-            Font.color(color_rgba(255, 255, 255, 0.9))
-          ],
-          text(clock(playback.position_ms))
-        )
+        overlay_button(:stop, event(videos, :stop, nil))
       ])
+
+    bottom =
+      column(
+        [width(fill()), padding_each(s(24), s(12), s(14), s(12)), spacing(s(10)), shade.(90)],
+        [scrubber(videos, playback), buttons]
+      )
 
     column([width(fill()), height(fill())], [
       top,
       el([width(fill()), height(fill())], none()),
       bottom
     ])
+  end
+
+  # The progress bar, which seeks when dragged, with the time and the
+  # length either side. A file without an index (raw H.264) has no length,
+  # so only the time shows.
+  defp scrubber(_videos, %{duration_ms: nil} = playback) do
+    el(
+      [Font.size(s(13)), Font.color(color_rgba(255, 255, 255, 0.9))],
+      text(clock(playback.position_ms))
+    )
+  end
+
+  defp scrubber(videos, playback) do
+    duration = Kernel.max(playback.duration_ms, 1)
+    position = Kernel.min(playback.position_ms, duration)
+
+    time = fn ms ->
+      el(
+        [center_y(), Font.size(s(12)), Font.color(color_rgba(255, 255, 255, 0.9))],
+        text(clock(ms))
+      )
+    end
+
+    slider =
+      Input.slider(
+        [
+          width(fill()),
+          height(px(s(32))),
+          center_y(),
+          Input.Slider.config(
+            min: 0,
+            max: duration,
+            step: 0,
+            track:
+              el(
+                [
+                  height(px(s(4))),
+                  center_y(),
+                  Border.rounded(s(2)),
+                  Background.color(color_rgba(255, 255, 255, 0.3))
+                ],
+                none()
+              ),
+            filled_track:
+              el(
+                [height(px(s(4))), center_y(), Border.rounded(s(2)), Background.color(c(:white))],
+                none()
+              ),
+            thumb:
+              el(
+                [
+                  width(px(s(18))),
+                  height(px(s(18))),
+                  Border.rounded(s(9)),
+                  Background.color(c(:white))
+                ],
+                none()
+              )
+          ),
+          Event.on_change(event(videos, :seek))
+        ],
+        position
+      )
+
+    row([width(fill()), spacing(s(10))], [time.(position), slider, time.(duration)])
   end
 
   defp overlay_button(icon_name, on_press, size \\ 44) do

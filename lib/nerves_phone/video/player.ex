@@ -3,16 +3,18 @@ defmodule NervesPhone.Video.Player do
   Plays a video file: the picture into one of the UI's video targets, the
   sound to the speaker.
 
-      File.Source -> [MP4 demuxer] -+-> H264.Parser -> Membrane.V4L2.H264.Decoder
-                                    |     -> Pacer -> Membrane.VideoInterop.Sink -> Emerge
-                                    +-> AAC.Parser -> AAC.FDK.Decoder
-                                          -> AudioGate -> PortAudio.Sink -> ALSA
+      MP4Source -+-> H264.Parser -> Membrane.V4L2.H264.Decoder
+                 |     -> Pacer -> Membrane.VideoInterop.Sink -> Emerge
+                 +-> AAC.Parser -> AAC.FDK.Decoder
+                       -> AudioGate -> PortAudio.Sink -> ALSA
 
   The video decoder is the phone's Venus hardware decoder; frames reach the
   screen as DMA-BUFs without being copied (see membrane_v4l2_decoder).
-  MP4 and QuickTime files are demuxed, with or without "fast start"; the
-  first AAC track plays, and any other tracks are dropped. Raw H.264
-  (`.h264`, `.264`) has no timestamps or sound, so it plays at 30 fps.
+  MP4 and QuickTime files are read through their index
+  (`NervesPhone.Video.MP4`), so they can play from any point; the first
+  H.264 and AAC tracks play. Raw H.264 (`.h264`, `.264`) is read with
+  `Membrane.File.Source`; it has no timestamps, sound or index, so it
+  plays at 30 fps from the start.
 
   ## Keeping picture and sound together
 
@@ -30,8 +32,9 @@ defmodule NervesPhone.Video.Player do
 
   ## Messages
 
-  The pipeline tells `notify` `{:video, message}`: `:playing` once the
-  first frame is shown, `{:position, ms}`, `:ended`, and `{:error, reason}`.
+  The pipeline tells `notify` `{:video, pipeline, message}`: `:playing`
+  once the first frame is shown, `{:position, ms}` (the time in the file),
+  `:ended`, and `{:error, reason}`.
 
   Before stopping, take the video element off screen so Emerge lets go of
   the frame it shows; the decoder waits for every frame to come back when
@@ -48,17 +51,22 @@ defmodule NervesPhone.Video.Player do
   `notify`. Use a fresh target for each video: Emerge keeps showing the
   last frame a target got, so reusing one would show the previous video
   until the new one's first frame.
+
+  Options: `:index`, the file's `NervesPhone.Video.MP4` index (needed for
+  MP4 and QuickTime files), and `:start_ms`, where to start.
   """
-  @spec start(Path.t(), pid(), atom()) :: {:ok, pid()} | {:error, term()}
+  @spec start(Path.t(), pid(), atom(), keyword()) :: {:ok, pid()} | {:error, term()}
   if Mix.target() == :host do
-    def start(_path, _notify, _target), do: {:error, :no_hardware_decoder}
+    def start(_path, _notify, _target, _opts), do: {:error, :no_hardware_decoder}
   else
-    def start(path, notify, target) do
+    def start(path, notify, target, opts) do
       with {:ok, _supervisor, pipeline} <-
              Membrane.Pipeline.start(__MODULE__.Pipeline, %{
                path: path,
                notify: notify,
-               target: target
+               target: target,
+               index: opts[:index],
+               start_ns: Membrane.Time.milliseconds(opts[:start_ms] || 0)
              }) do
         {:ok, pipeline}
       end
@@ -100,9 +108,7 @@ defmodule NervesPhone.Video.Player do
       @start_margin_ms 60
       # How long the picture waits for sound before starting without it.
       @audio_wait_ms 1_500
-      # File reads. Until it has the whole index (`moov`, megabytes for a
-      # long video), the MP4 demuxer parses everything it has received again
-      # on each chunk, so small chunks make opening a file very slow.
+      # Raw H.264 file reads.
       @chunk_size 1_048_576
       # Sound queued at the sink: 2048 frames, ~46 ms at 44.1 kHz stereo.
       @audio_queue_bytes 8_192
@@ -112,10 +118,11 @@ defmodule NervesPhone.Video.Player do
       @audio_tail_ms 80
 
       @impl true
-      def handle_init(_ctx, %{path: path, notify: notify, target: target}) do
+      def handle_init(_ctx, %{path: path, notify: notify, target: target} = opts) do
         state = %{
           notify: notify,
           target: target,
+          start_ns: opts.start_ns,
           audio?: false,
           video_first: nil,
           audio_first: nil,
@@ -136,74 +143,49 @@ defmodule NervesPhone.Video.Player do
 
           {[spec: spec], state}
         else
-          spec =
-            child(:source, %Membrane.File.Source{
-              location: path,
-              seekable?: true,
-              chunk_size: @chunk_size
-            })
-            |> child(:demuxer, %Membrane.MP4.Demuxer.ISOM{optimize_for_non_fast_start?: true})
+          index = opts.index
 
-          {[spec: spec], state}
+          video =
+            get_child(:source)
+            |> via_out(Membrane.Pad.ref(:output, :video))
+            |> child(:parser, %Membrane.H264.Parser{
+              output_alignment: :au,
+              output_stream_structure: :annexb
+            })
+            |> video_tail(state.target, state.start_ns)
+
+          audio =
+            if index.audio do
+              [
+                get_child(:source)
+                |> via_out(Membrane.Pad.ref(:output, :audio))
+                |> child(:aac_parser, %Membrane.AAC.Parser{out_encapsulation: :ADTS})
+                |> child(:aac_decoder, Membrane.AAC.FDK.Decoder)
+                |> child(:audio_gate, NervesPhone.Video.AudioGate)
+                # Membrane's default input queue here holds ~0.85 s of sound
+                # past the gate, which would play on after a pause.
+                |> via_in(:input, target_queue_size: @audio_queue_bytes)
+                |> child(:audio_sink, %Membrane.PortAudio.Sink{
+                  latency: :low,
+                  ringbuffer_size: 2048
+                })
+              ]
+            else
+              []
+            end
+
+          source =
+            child(:source, %NervesPhone.Video.MP4Source{
+              path: path,
+              index: index,
+              start_ns: opts.start_ns
+            })
+
+          {[spec: [source, video | audio]], %{state | audio?: index.audio != nil}}
         end
       end
 
       @impl true
-      def handle_child_notification({:new_tracks, tracks}, :demuxer, _ctx, state) do
-        video = Enum.find(tracks, fn {_id, format} -> match?(%Membrane.H264{}, format) end)
-        audio = Enum.find(tracks, fn {_id, format} -> match?(%Membrane.AAC{}, format) end)
-
-        case video do
-          nil ->
-            report(state, {:error, :no_h264_video})
-            {[], state}
-
-          {video_id, _format} ->
-            video_branch =
-              get_child(:demuxer)
-              |> via_out(Membrane.Pad.ref(:output, video_id))
-              |> child(:parser, %Membrane.H264.Parser{
-                output_alignment: :au,
-                output_stream_structure: :annexb
-              })
-              |> video_tail(state.target)
-
-            audio_branch =
-              case audio do
-                {audio_id, _format} ->
-                  [
-                    get_child(:demuxer)
-                    |> via_out(Membrane.Pad.ref(:output, audio_id))
-                    |> child(:aac_parser, %Membrane.AAC.Parser{out_encapsulation: :ADTS})
-                    |> child(:aac_decoder, Membrane.AAC.FDK.Decoder)
-                    |> child(:audio_gate, NervesPhone.Video.AudioGate)
-                    # Membrane's default input queue here holds ~0.85 s of
-                    # sound past the gate, which would play on after a pause.
-                    |> via_in(:input, target_queue_size: @audio_queue_bytes)
-                    |> child(:audio_sink, %Membrane.PortAudio.Sink{
-                      latency: :low,
-                      ringbuffer_size: 2048
-                    })
-                  ]
-
-                nil ->
-                  []
-              end
-
-            # The demuxer wants every track linked.
-            playing = for {id, _} <- [video, audio], id != nil, do: id
-
-            others =
-              for {id, _format} <- tracks, id not in playing do
-                get_child(:demuxer)
-                |> via_out(Membrane.Pad.ref(:output, id))
-                |> child({:discard, id}, Membrane.Fake.Sink)
-              end
-
-            {[spec: [video_branch | audio_branch ++ others]], %{state | audio?: audio != nil}}
-        end
-      end
-
       def handle_child_notification({:ready, pts}, :pacer, _ctx, state) do
         if state.audio?, do: Process.send_after(self(), :stop_waiting_for_audio, @audio_wait_ms)
         maybe_start(%{state | video_first: pts})
@@ -310,17 +292,17 @@ defmodule NervesPhone.Video.Player do
       defp audio_notify(%{audio?: true}, message), do: [notify_child: {:audio_gate, message}]
       defp audio_notify(_state, _message), do: []
 
-      defp video_tail(builder, target) do
+      defp video_tail(builder, target, start_ns \\ 0) do
         builder
         |> child(:decoder, Membrane.V4L2.H264.Decoder)
-        |> child(:pacer, NervesPhone.Video.Pacer)
+        |> child(:pacer, %NervesPhone.Video.Pacer{start_ns: start_ns})
         |> child(:sink, %Membrane.VideoInterop.Sink{
           submit: {NervesPhone.Video.Player, :submit, []},
           target: target
         })
       end
 
-      defp report(state, message), do: send(state.notify, {:video, message})
+      defp report(state, message), do: send(state.notify, {:video, self(), message})
     end
   end
 end

@@ -33,7 +33,8 @@ defmodule NervesPhone.YtDlp do
           duration: number() | nil,
           channel: String.t() | nil,
           thumbnail: String.t() | nil,
-          is_live: boolean()
+          is_live: boolean(),
+          live_status: String.t() | nil
         }
 
   @type format :: %{
@@ -57,7 +58,7 @@ defmodule NervesPhone.YtDlp do
   @typedoc "What to fetch: `as: :video | :audio`, and `max_height: lines` for video."
   @type format_option :: {:as, :video | :audio} | {:max_height, pos_integer()}
 
-  @entry_keys ~w(id title url duration channel thumbnail is_live)a
+  @entry_keys ~w(id title url duration channel thumbnail is_live live_status)a
   @format_keys ~w(format_id ext protocol acodec vcodec abr height filesize)a
 
   @doc """
@@ -242,9 +243,10 @@ defmodule NervesPhone.YtDlp do
             sys.path.insert(0, priv_dir)
 
         import nerves_phone_yt_dlp as bridge
+        bridge.configure(qjs)
 
         """ <> code,
-        Map.put(globals, "priv_dir", priv_dir)
+        Map.merge(globals, %{"priv_dir" => priv_dir, "qjs" => qjs()})
       )
 
     case result && Pythonx.decode(result) do
@@ -252,6 +254,12 @@ defmodule NervesPhone.YtDlp do
       {"error", message} -> {:error, message}
       nil -> :ok
     end
+  end
+
+  # QuickJS, which yt-dlp needs for YouTube (see `mix python.vendor`).
+  defp qjs do
+    path = Path.join(NervesPhone.Python.dir(), "qjs")
+    if File.exists?(path), do: path
   end
 
   defp to_entry(map), do: Map.new(@entry_keys, &{&1, map[Atom.to_string(&1)]})

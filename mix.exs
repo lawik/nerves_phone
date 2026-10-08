@@ -89,8 +89,8 @@ defmodule NervesPhone.MixProject do
 
       # Video playback (NervesPhone.Video.Player): files, MP4, H.264 through
       # the Venus hardware decoder, AAC, and frames to Emerge.
-      {:membrane_file_plugin, "~> 0.17.5", targets: @all_targets},
-      {:membrane_mp4_plugin, "~> 0.36.10", targets: @all_targets},
+      {:membrane_file_plugin, "~> 0.17.5"},
+      {:membrane_mp4_plugin, "~> 0.36.10"},
       {:membrane_h26x_plugin, "~> 0.11.2", targets: @all_targets},
       {:membrane_aac_plugin, "~> 0.19.4", targets: @all_targets},
       {:membrane_aac_fdk_plugin, "~> 0.19.0", targets: @all_targets},

@@ -31,6 +31,21 @@ _BASE_OPTS = {
     "cachedir": False,
 }
 
+# The JavaScript runtime for YouTube's challenges, set by configure().
+_js_runtimes = {}
+
+
+def configure(qjs):
+    """Points yt-dlp at QuickJS, or at nothing when there's none."""
+    global _js_runtimes
+    _js_runtimes = {"quickjs": {"path": qjs}} if qjs else {}
+
+
+def _opts(opts):
+    js = {"js_runtimes": _js_runtimes} if _js_runtimes else {}
+    return {**_BASE_OPTS, **js, **opts}
+
+
 # Cancellation flags for running downloads, by download id.
 _cancels = {}
 
@@ -40,7 +55,7 @@ _PROGRESS_INTERVAL = 0.5
 
 def _run(opts, fun):
     try:
-        with yt_dlp.YoutubeDL({**_BASE_OPTS, **opts}) as ydl:
+        with yt_dlp.YoutubeDL(_opts(opts)) as ydl:
             return ("ok", fun(ydl))
     except DownloadError as error:
         return ("error", _message(error))
@@ -67,6 +82,9 @@ def _entry(info):
         "channel": info.get("channel") or info.get("uploader"),
         "thumbnail": _thumbnail(info),
         "is_live": bool(info.get("is_live")) or info.get("live_status") == "is_live",
+        # "is_upcoming", "is_live", "post_live", "was_live" or "not_live",
+        # when yt-dlp knows.
+        "live_status": info.get("live_status"),
     }
 
 
@@ -139,7 +157,7 @@ def start_download(id, url, dir, format, send):
 
     def run():
         try:
-            with yt_dlp.YoutubeDL({**_BASE_OPTS, **opts}) as ydl:
+            with yt_dlp.YoutubeDL(_opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
             send(("done", info["requested_downloads"][0]["filepath"]))
         except Exception as error:

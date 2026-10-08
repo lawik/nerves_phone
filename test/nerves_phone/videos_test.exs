@@ -15,17 +15,21 @@ defmodule NervesPhone.VideosTest do
 
   defmodule FakePlayer do
     @moduledoc false
-    # Plays nothing: reports :playing at once, and remembers what it's told.
+    # Plays nothing: reports :playing at once. The latest one's pid and
+    # options are kept, so tests can speak for it and check how it started.
 
-    def start(path, notify, _target) do
+    def start(path, notify, _target, opts) do
       pid =
         spawn(fn ->
-          send(notify, {:video, :playing})
+          send(notify, {:video, self(), :playing})
           loop(path, notify)
         end)
 
+      :persistent_term.put(__MODULE__, {pid, opts})
       {:ok, pid}
     end
+
+    def last, do: :persistent_term.get(__MODULE__)
 
     def pause(pid), do: send(pid, :pause)
     def resume(pid), do: send(pid, :resume)
@@ -44,7 +48,7 @@ defmodule NervesPhone.VideosTest do
     File.rm_rf!(root)
     File.mkdir_p!(Path.join(root, "holiday"))
     File.mkdir_p!(Path.join(root, ".hidden"))
-    File.write!(Path.join(root, "holiday/beach.mp4"), String.duplicate("x", 2_000_000))
+    File.cp!("test/fixtures/tiny.mp4", Path.join(root, "holiday/beach.mp4"))
     File.write!(Path.join(root, "holiday/Arrival.MOV"), "x")
     File.write!(Path.join(root, "clip.h264"), "x")
     File.write!(Path.join(root, "notes.txt"), "x")
@@ -100,9 +104,82 @@ defmodule NervesPhone.VideosTest do
     Solve.dispatch(@app, :videos, :play, Path.join(root, "clip.h264"))
     wait_for(fn -> videos().playback != nil end)
 
-    send(Solve.controller_pid(@app, :videos), {:video, {:position, 61_000}})
-    send(Solve.controller_pid(@app, :videos), {:video, :ended})
+    {pipeline, _opts} = FakePlayer.last()
+    send(Solve.controller_pid(@app, :videos), {:video, pipeline, {:position, 61_000}})
+    send(Solve.controller_pid(@app, :videos), {:video, pipeline, :ended})
     wait_for(fn -> match?(%{status: :ended, position_ms: 61_000}, videos().playback) end)
+
+    # A pipeline that isn't the current one is ignored.
+    send(Solve.controller_pid(@app, :videos), {:video, self(), {:position, 5}})
+    Process.sleep(100)
+    assert videos().playback.position_ms == 61_000
+  end
+
+  test "an MP4 is indexed, and seeking plays from the new time", %{root: root} do
+    wait_for(fn -> not videos().scanning end)
+    Solve.dispatch(@app, :videos, :play, Path.join(root, "holiday/beach.mp4"))
+    wait_for(fn -> match?(%{status: :playing, duration_ms: 2_000}, videos().playback) end)
+    {first, opts} = FakePlayer.last()
+    assert opts[:start_ms] == 0 and opts[:index].video.count == 60
+
+    # Dragging: the time follows at once, the seek waits for a pause.
+    for ms <- [400, 800, 1_200], do: Solve.dispatch(@app, :videos, :seek, ms)
+    wait_for(fn -> videos().playback.position_ms == 1_200 end)
+    assert {^first, _} = FakePlayer.last()
+
+    wait_for(fn -> elem(FakePlayer.last(), 0) != first end)
+    assert {_pipeline, [index: _, start_ms: 1_200]} = FakePlayer.last()
+    wait_for(fn -> videos().playback.status == :playing end)
+  end
+
+  describe "MP4 index and source" do
+    alias NervesPhone.Video.{MP4, MP4Source}
+
+    setup do
+      Application.put_env(:nerves_phone, :state_dir, NervesPhone.state_dir())
+      {:ok, index} = MP4.index("test/fixtures/tiny.mp4")
+      {:ok, index: index}
+    end
+
+    test "lists every sample, with keyframes", %{index: index} do
+      assert index.duration_ns == 2_000_000_000
+      assert index.video.count == 60
+      assert Tuple.to_list(index.video.keyframes) == [0, 15, 30, 45]
+      assert %Membrane.H264{width: 160, height: 90} = index.video.format
+      assert %Membrane.AAC{} = index.audio.format
+      assert MP4.start_sample(index.video, :video, 1_100_000_000) == 30
+    end
+
+    test "reads from the keyframe before the start, both tracks to the end", %{index: index} do
+      import Membrane.ChildrenSpec
+      require Membrane.Pad
+
+      pipeline =
+        Testing.Pipeline.start_link_supervised!(
+          spec: [
+            child(:source, %MP4Source{
+              path: "test/fixtures/tiny.mp4",
+              index: index,
+              start_ns: 1_100_000_000
+            }),
+            get_child(:source)
+            |> via_out(Membrane.Pad.ref(:output, :video))
+            |> child(:video, Testing.Sink),
+            get_child(:source)
+            |> via_out(Membrane.Pad.ref(:output, :audio))
+            |> child(:audio, Testing.Sink)
+          ]
+        )
+
+      assert_sink_stream_format(pipeline, :video, %Membrane.H264{})
+      assert_sink_buffer(pipeline, :video, %Membrane.Buffer{pts: pts})
+      {_offset, _size, _dts, keyframe_pts, true} = MP4.sample(index.video, 30)
+      assert pts == keyframe_pts
+      assert_sink_buffer(pipeline, :audio, %Membrane.Buffer{pts: audio_pts})
+      assert audio_pts >= 1_100_000_000
+      assert_end_of_stream(pipeline, :video)
+      assert_end_of_stream(pipeline, :audio)
+    end
   end
 
   test "renders the library and the player", %{root: root} do

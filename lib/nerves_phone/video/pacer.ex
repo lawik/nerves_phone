@@ -13,24 +13,37 @@ defmodule NervesPhone.Video.Pacer do
   `{:start, base, origin}`, meaning pts `origin` is shown at monotonic time
   `base` (ms). That lets the player line the picture up with the sound.
 
+  When playing from a point in the middle (`start_ns`), decoding starts at
+  the keyframe before it; the frames before `start_ns` are released
+  without being shown, and `:ready` waits for the first one at or after it.
+
   The parent also sends `:pause` and `:resume`; the element tells the
-  parent `{:position, ms}` about once a second, and `:first_frame` when the
-  first frame goes out.
+  parent `{:position, ms}` (the shown frame's pts) a few times a second,
+  and `:first_frame` when the first frame goes out.
   """
 
   # The input is auto (the decoder pushes anyway, bounded by its buffers);
   # the output is push, timed here.
   use Membrane.Filter, flow_control_hints?: false
 
+  def_options(
+    start_ns: [
+      spec: non_neg_integer(),
+      default: 0,
+      description: "Frames before this pts are dropped (playing from a point)."
+    ]
+  )
+
   def_input_pad(:input, accepted_format: _any, flow_control: :auto)
   def_output_pad(:output, accepted_format: _any, flow_control: :push)
 
-  @position_every_ms 1_000
+  @position_every_ms 250
 
   @impl true
-  def handle_init(_ctx, _opts) do
+  def handle_init(_ctx, opts) do
     {[],
      %{
+       start_ns: opts.start_ns,
        queue: :queue.new(),
        # pts `origin` is shown at monotonic time `base` (ms), once started.
        origin: nil,
@@ -45,6 +58,12 @@ defmodule NervesPhone.Video.Pacer do
   end
 
   @impl true
+  def handle_buffer(:input, %{pts: pts} = buffer, _ctx, %{start_ns: start_ns} = state)
+      when is_integer(pts) and pts < start_ns do
+    release_frame(buffer)
+    {[], state}
+  end
+
   def handle_buffer(:input, buffer, _ctx, state) do
     state = %{state | queue: :queue.in(buffer, state.queue)}
 
@@ -177,7 +196,7 @@ defmodule NervesPhone.Video.Pacer do
   defp track_position([], state), do: state
 
   defp position_ms(state, buffer),
-    do: Membrane.Time.as_milliseconds(max((buffer.pts || state.origin) - state.origin, 0), :round)
+    do: Membrane.Time.as_milliseconds(max(buffer.pts || state.origin, 0), :round)
 
   defp release_frame(%Membrane.Buffer{payload: %VideoInterop.Frame{} = frame}),
     do: VideoInterop.release(frame)
