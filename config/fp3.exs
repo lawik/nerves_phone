@@ -20,28 +20,37 @@ config :emerge, compiled_backends: [drm: [:opengl]]
 
 # The msm DRM device that drives the panel. See EmergeSkia.drm_outputs/1.
 #
-# Rendered on the CPU into a KMS dumb buffer: Emerge's OpenGL path on the
-# Adreno 506 (Mesa freedreno) spun a core at 100% and wedged its render
-# thread, which froze the UI.
+# Rendered with OpenGL ES on the Adreno 506 (Mesa freedreno). The driver's
+# GMEM tiling path hangs on Skia's MSAA depth/stencil attachments, so
+# rel/vm.args.eex sets FD_MESA_DEBUG=sysmem to bypass it.
 config :nerves_phone, :viewport,
   backend: :drm,
   drm_card: "/dev/dri/card0",
   hw_cursor: false,
-  rendering_api: [raster: [present: :cpu]]
+  rendering_api: :opengl
 
 # Scale the UI for the panel's ~430 dpi.
 config :nerves_phone, ui_scale: 2.5
 
-# Turn the screen off after 30 s without touches; the next touch wakes it.
-config :nerves_phone, screen_timeout_ms: 30_000
+# The display until it's changed in Settings (then it's saved in
+# state_dir/display.json): dim after 30 s without touches, black after 1 min.
+config :nerves_phone, :display,
+  brightness: 60,
+  auto: false,
+  dim_after_ms: 30_000,
+  off_after_ms: 60_000
 
-# Volume buttons drive ALSA's softvol "Master" (rootfs_overlay/etc/asound.conf).
+# The accelerometer is mounted turned a quarter from the screen: held
+# upright, its x reads +9.8 m/s^2. These map it to the screen's axes for
+# NervesPhone.Orientation.
+config :nerves_phone, :orientation, axes: [x: {:y, 1}, y: {:x, 1}]
+
+# The phone's own files, such as the Wi-Fi settings kept while Wi-Fi is off.
+config :nerves_phone, state_dir: "/data/phone"
+
+# The volume buttons drive ALSA's softvol "Master"
+# (rootfs_overlay/etc/asound.conf).
 config :nerves_phone, volume_control: :alsa
-
-# The player's files (covers, volume), and Spotify's tokens and librespot's
-# credential cache.
-config :nerves_phone, state_dir: "/data/music"
-config :nerves_phone, :spotify, state_dir: "/data/spotify"
 
 # Use shoehorn to start the main application. nerves_ai runs the
 # first-boot F2FS resize (which briefly unmounts /root) before the app

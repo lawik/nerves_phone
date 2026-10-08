@@ -1,131 +1,3 @@
-defmodule Mix.Tasks.Compile.Librespot do
-  @shortdoc "Builds librespot and the spotify-meta helper for the current target"
-  @moduledoc """
-  Builds the Spotify backend's two native programs with cargo, into
-  `_build/librespot/<version>-<target>/bin/`:
-
-    * `librespot`, the Spotify Connect receiver, once per target and
-      librespot version. It's built with only the pipe audio backend (PCM
-      goes to a FIFO that the Membrane pipeline reads), rustls for TLS and
-      libmdns for Spotify Connect discovery.
-    * `spotify-meta` from `native/spotify_meta`, which lists playlists the
-      Web API won't. Rebuilt when its sources change.
-
-  For a Nerves target it cross-compiles with the system's toolchain and
-  sysroot.
-  """
-  use Mix.Task.Compiler
-
-  @version "0.8.0"
-  @features "rustls-tls-webpki-roots,with-libmdns"
-
-  @meta_src Path.expand("native/spotify_meta", __DIR__)
-
-  @impl Mix.Task.Compiler
-  def run(_args) do
-    built_librespot? = if File.exists?(path()), do: false, else: build()
-    built_meta? = if meta_stale?(), do: build_meta(), else: false
-    if built_librespot? or built_meta?, do: {:ok, []}, else: {:noop, []}
-  end
-
-  @doc "Where librespot for the current target ends up."
-  def path, do: Path.join([root(), "bin", "librespot"])
-
-  @doc "Where spotify-meta for the current target ends up."
-  def meta_path, do: Path.join([root(), "bin", "spotify-meta"])
-
-  defp meta_stale? do
-    case File.stat(meta_path(), time: :posix) do
-      {:ok, %{mtime: built}} ->
-        sources =
-          ["Cargo.toml", "Cargo.lock", "src/**/*.rs"]
-          |> Enum.flat_map(&Path.wildcard(Path.join(@meta_src, &1)))
-        Enum.any?(sources, &(File.stat!(&1, time: :posix).mtime > built))
-
-      _ ->
-        true
-    end
-  end
-
-  defp build_meta do
-    Mix.shell().info("==> Building spotify-meta for #{Mix.target()}")
-
-    args =
-      ["install", "--path", @meta_src, "--locked", "--force", "--root", root()] ++ target_args()
-
-    case System.cmd("cargo", args, env: cargo_env(), stderr_to_stdout: true, into: IO.stream()) do
-      {_, 0} -> true
-      {_, status} -> Mix.raise("Building spotify-meta failed (cargo exited with #{status})")
-    end
-  end
-
-  defp root do
-    Path.join([Mix.Project.build_path(), "..", "librespot", "#{@version}-#{Mix.target()}"])
-    |> Path.expand()
-  end
-
-  defp build do
-    Mix.shell().info("==> Building librespot #{@version} for #{Mix.target()}")
-
-    args =
-      ~w(install librespot --version #{@version} --locked --force --no-default-features) ++
-        ["--features", @features, "--root", root()] ++ target_args()
-
-    case System.cmd("cargo", args, env: cargo_env(), stderr_to_stdout: true, into: IO.stream()) do
-      {_, 0} -> true
-      {_, status} -> Mix.raise("Building librespot failed (cargo exited with #{status})")
-    end
-  end
-
-  defp target_args do
-    case rust_target() do
-      nil -> []
-      triple -> ["--target", triple]
-    end
-  end
-
-  # aarch64-nerves-linux-gnu -> aarch64-unknown-linux-gnu
-  defp rust_target do
-    case System.get_env("CROSSCOMPILE") do
-      nil -> nil
-      prefix -> prefix |> Path.basename() |> String.replace("-nerves-", "-unknown-")
-    end
-  end
-
-  defp cargo_env do
-    # Host-side build scripts need the host's ar, not the cross-ar wrapper.
-    path =
-      System.get_env("PATH", "")
-      |> String.split(":")
-      |> Enum.reject(&String.ends_with?(&1, "scripts/cross-ar"))
-      |> Enum.join(":")
-
-    base = [{"CARGO_PROFILE_RELEASE_STRIP", "true"}, {"PATH", path}]
-
-    case {rust_target(), System.get_env("CROSSCOMPILE"), System.get_env("NERVES_SDK_SYSROOT")} do
-      {nil, _, _} ->
-        base
-
-      {triple, prefix, sysroot} ->
-        key = triple |> String.upcase() |> String.replace("-", "_")
-        cc_key = String.replace(triple, "-", "_")
-
-        # Nerves exports CC/CFLAGS for the target. Clear them so build
-        # scripts compiled for the host use the host compiler, and give the
-        # target compiler through cargo's per-target variables instead.
-        base ++
-          Enum.map(~w(CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS AR), &{&1, nil}) ++
-          [
-            {"CC_#{cc_key}", prefix <> "-gcc"},
-            {"AR_#{cc_key}", prefix <> "-ar"},
-            {"CFLAGS_#{cc_key}", "--sysroot=#{sysroot}"},
-            {"CARGO_TARGET_#{key}_LINKER", prefix <> "-gcc"},
-            {"CARGO_TARGET_#{key}_RUSTFLAGS", "-C link-arg=--sysroot=#{sysroot}"}
-          ]
-    end
-  end
-end
-
 defmodule NervesPhone.MixProject do
   use Mix.Project
 
@@ -151,15 +23,10 @@ defmodule NervesPhone.MixProject do
       elixir: "~> 1.19",
       archives: [nerves_bootstrap: "~> 1.17"],
       start_permanent: Mix.env() == :prod,
-      compilers: Mix.compilers() ++ [:librespot],
-      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       releases: [{@app, release()}]
     ]
   end
-
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
-  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
@@ -193,7 +60,7 @@ defmodule NervesPhone.MixProject do
   end
 
   def cli do
-    [preferred_targets: [run: :host, test: :host, "spotify.login": :host]]
+    [preferred_targets: [run: :host, test: :host]]
   end
 
   # Run "mix help deps" to learn about dependencies.
@@ -215,16 +82,29 @@ defmodule NervesPhone.MixProject do
       {:emerge, "~> 0.4.2"},
       {:solve, "~> 0.3.1"},
 
-      # Audio: librespot's PCM runs through a Membrane pipeline to PortAudio.
+      # Media pipelines (audio now, video later), played through PortAudio.
       {:membrane_core, "~> 1.2"},
       {:membrane_raw_audio_format, "~> 0.12.0"},
       {:membrane_portaudio_plugin, "~> 0.19.6"},
 
-      # Spotify Web API
-      {:req, "~> 0.7"},
+      # Video playback (NervesPhone.Video.Player): files, MP4, H.264 through
+      # the Venus hardware decoder, AAC, and frames to Emerge.
+      {:membrane_file_plugin, "~> 0.17.5", targets: @all_targets},
+      {:membrane_mp4_plugin, "~> 0.36.10", targets: @all_targets},
+      {:membrane_h26x_plugin, "~> 0.11.2", targets: @all_targets},
+      {:membrane_aac_plugin, "~> 0.19.4", targets: @all_targets},
+      {:membrane_aac_fdk_plugin, "~> 0.19.0", targets: @all_targets},
+      {:membrane_video_interop, "~> 0.1.1", targets: @all_targets},
+      {:membrane_v4l2_decoder, path: "../membrane_v4l2_decoder", targets: @all_targets},
 
-      # Runs librespot and cleans it up if the BEAM goes away.
-      {:muontrap, "~> 1.5"},
+      # Embedded Python, for svtplay-dl and yt-dlp (see NervesPhone.Python).
+      {:pythonx, "~> 0.4.10"},
+
+      # Runs tailscaled (see NervesPhone.Tailscale).
+      {:muontrap, "~> 1.8"},
+
+      # The QR code for logging in to Tailscale from Settings.
+      {:eqrcode, "~> 0.2.1"},
 
       # ---------------- Dependencies for all targets except :host ----------------
       {:nerves_pack, "~> 0.7", targets: @all_targets},
@@ -275,10 +155,12 @@ defmodule NervesPhone.MixProject do
       include_erts: &Nerves.Release.erts/0,
       steps: [
         &Nerves.Release.init/1,
+        &vendor_python/1,
         :assemble,
         &drop_foreign_nifs/1,
-        &trim_portaudio/1,
-        &add_librespot/1
+        &drop_foreign_python/1,
+        &add_tailscale/1,
+        &trim_portaudio/1
       ],
       strip_beams: Mix.env() == :prod or [keep: ["Docs"]]
     ]
@@ -297,6 +179,73 @@ defmodule NervesPhone.MixProject do
     end
 
     release
+  end
+
+  # Downloads the target's Python into priv before it's copied into the
+  # release, when it's missing or the pins in `mix python.vendor` changed.
+  defp vendor_python(%Mix.Release{} = release) do
+    if not Mix.Tasks.Python.Vendor.up_to_date?(), do: Mix.Task.run("python.vendor")
+    release
+  end
+
+  # Like the NIFs, priv/python collects a Python for each target that
+  # `mix python.vendor` ran for. Keep only the target's.
+  defp drop_foreign_python(%Mix.Release{} = release) do
+    release.path
+    |> Path.join("lib/nerves_phone-*/priv/python/*")
+    |> Path.wildcard()
+    |> Enum.reject(&(Path.basename(&1) == to_string(Mix.target())))
+    |> Enum.each(&File.rm_rf!/1)
+
+    release
+  end
+
+  # Tailscale isn't in the Nerves system, so its static build goes into
+  # priv/tailscale (see NervesPhone.Tailscale). It's downloaded once per
+  # version into _build/tailscale and checked against its SHA-256 (from
+  # pkgs.tailscale.com/stable/<tarball>.sha256).
+  @tailscale_version "1.104.1"
+  @tailscale_sha256 "f60294374967f3dfd8cf57bbbd474d6cfce32d123e3a8ddeab82a87940daa806"
+
+  defp add_tailscale(%Mix.Release{} = release) do
+    if Mix.target() != :host do
+      bin =
+        Path.join(Mix.Project.build_path(), "../tailscale/#{@tailscale_version}") |> Path.expand()
+
+      if not File.exists?(Path.join(bin, "tailscaled")), do: fetch_tailscale(bin)
+
+      [priv] = Path.wildcard(Path.join(release.path, "lib/#{@app}-*/priv"))
+      File.cp_r!(bin, Path.join(priv, "tailscale"))
+    end
+
+    release
+  end
+
+  defp fetch_tailscale(bin) do
+    tarball = "tailscale_#{@tailscale_version}_arm64.tgz"
+    Mix.shell().info("==> Fetching #{tarball}")
+
+    archive =
+      case Mix.Utils.read_path("https://pkgs.tailscale.com/stable/#{tarball}", timeout: 300_000) do
+        {:ok, body} -> body
+        {_kind, message} -> Mix.raise("Downloading #{tarball} failed: #{message}")
+      end
+
+    if Base.encode16(:crypto.hash(:sha256, archive), case: :lower) != @tailscale_sha256 do
+      Mix.raise("#{tarball} doesn't match its pinned SHA-256")
+    end
+
+    dir = "tailscale_#{@tailscale_version}_arm64"
+    files = for name <- ~w(tailscale tailscaled), do: ~c"#{dir}/#{name}"
+    {:ok, extracted} = :erl_tar.extract({:binary, archive}, [:compressed, :memory, files: files])
+
+    File.mkdir_p!(bin)
+
+    for {path, contents} <- extracted do
+      dest = Path.join(bin, Path.basename(to_string(path)))
+      File.write!(dest, contents)
+      File.chmod!(dest, 0o755)
+    end
   end
 
   # Membrane's precompiled PortAudio arrives as a ~100 MB bundle of
@@ -321,23 +270,6 @@ defmodule NervesPhone.MixProject do
       |> Path.join("lib/bundlex-*/priv/shared/precompiled")
       |> Path.wildcard()
       |> Enum.each(&File.rm_rf!/1)
-    end
-
-    release
-  end
-
-  # librespot and spotify-meta are built outside the app's priv (they're per
-  # target), so copy the target's binaries into the release.
-  defp add_librespot(%Mix.Release{} = release) do
-    if Mix.target() != :host do
-      bin = Path.join([release.path, "lib", "#{@app}-#{@version}", "priv", "bin"])
-      File.mkdir_p!(bin)
-
-      for src <- [Mix.Tasks.Compile.Librespot.path(), Mix.Tasks.Compile.Librespot.meta_path()] do
-        dest = Path.join(bin, Path.basename(src))
-        File.cp!(src, dest)
-        File.chmod!(dest, 0o755)
-      end
     end
 
     release

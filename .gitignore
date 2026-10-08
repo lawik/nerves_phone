@@ -25,3 +25,7 @@ erl_crash.dump
 
 # cargo output for native/spotify_meta
 /native/spotify_meta/target/
+
+
+# Python and its packages, from "mix python.vendor".
+/priv/python/

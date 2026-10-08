@@ -13,13 +13,19 @@ defmodule NervesPhone.Application do
         # Starts a worker by calling: NervesPhone.Worker.start_link(arg)
         # {NervesPhone.Worker, arg},
         {Task.Supervisor, name: NervesPhone.TaskSupervisor},
-        NervesPhone.Music.Covers,
-        NervesPhone.Audio.Volume
+        NervesPhone.Audio.Volume,
+        NervesPhone.Python,
+        NervesPhone.Downloads,
+        NervesPhone.SvtPlay
       ] ++
-        backend_children() ++
-        audio_children() ++
-        [{NervesPhone.State, name: NervesPhone.State}, NervesPhone.Screen] ++
-        ui_children() ++ target_children()
+        target_children() ++
+        [
+          {NervesPhone.State, name: NervesPhone.State},
+          NervesPhone.Screen,
+          # Which way up the UI is, from the accelerometer.
+          NervesPhone.Orientation
+        ] ++
+        ui_children()
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -27,26 +33,13 @@ defmodule NervesPhone.Application do
     Supervisor.start_link(children, opts)
   end
 
-  # The music service's own processes (for Spotify: its token store and
-  # librespot, which writes PCM into a FIFO).
-  defp backend_children() do
-    if Application.get_env(:nerves_phone, :start_backend, true),
-      do: NervesPhone.Music.Backend.impl().children(),
-      else: []
-  end
-
-  # The Membrane pipeline plays the backend's FIFO on the sound card. Tests
-  # turn these off in config/host.exs.
-  defp audio_children() do
-    if Application.get_env(:nerves_phone, :start_audio, true),
-      do: [NervesPhone.Audio.Keeper],
-      else: []
-  end
-
   # The viewport draws to the screen (or a window on the host). Tests
   # turn it off in config/host.exs.
   defp ui_children() do
-    if Application.get_env(:nerves_phone, :start_ui, true), do: [NervesPhone.UI], else: []
+    # Registered, so the video player can hand it frames.
+    if Application.get_env(:nerves_phone, :start_ui, true),
+      do: [{NervesPhone.UI, name: NervesPhone.UI}],
+      else: []
   end
 
   # List all child processes to be supervised
@@ -58,6 +51,8 @@ defmodule NervesPhone.Application do
         #
         # Starts a worker by calling: Host.Worker.start_link(arg)
         # {Host.Worker, arg},
+        # A stand-in for the network, as there's no VintageNet.
+        NervesPhone.Net
       ]
     end
   else
@@ -66,8 +61,12 @@ defmodule NervesPhone.Application do
         # Children for all targets except host
         # Starts a worker by calling: Target.Worker.start_link(arg)
         # {Target.Worker, arg},
-        # Volume and power buttons.
-        NervesPhone.Buttons
+        # The power button, and touches for the screen timeout.
+        NervesPhone.Buttons,
+        # Keeps the phone on the tailnet.
+        NervesPhone.Tailscale,
+        # epmd, and the phone as a distribution node.
+        NervesPhone.Distribution
       ]
     end
   end

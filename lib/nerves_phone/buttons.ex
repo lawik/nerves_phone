@@ -2,19 +2,16 @@
 if Mix.target() != :host do
   defmodule NervesPhone.Buttons do
     @moduledoc """
-    The phone's hardware buttons:
-
-      * volume up / down step the volume (holding repeats)
-      * a tap on the power button toggles play/pause
-      * a wired headset's play/pause button does the same
+    The phone's hardware buttons: volume up and down step the volume
+    (holding repeats), and a tap on the power button turns the screen off,
+    or on.
 
     It also watches the touchscreen and tells `NervesPhone.Screen` about
     touches, which keeps the screen on or wakes it.
 
     Reads the input devices with `input_event` (Emerge reads the same devices
-    for touch, which is fine: evdev hands events to every reader) and turns
-    key presses into events on the `:player` controller. Runs in its own
-    process, so a busy UI never delays a button.
+    for touch, which is fine: evdev hands events to every reader). Runs in
+    its own process, so a busy UI never delays a button.
     """
 
     use GenServer
@@ -33,7 +30,7 @@ if Mix.target() != :host do
 
     @impl GenServer
     def handle_info(:open, state) do
-      keys = [:key_volumeup, :key_volumedown, :key_power, :key_playpause]
+      keys = [:key_volumeup, :key_volumedown, :key_power]
 
       devices =
         for {path, info} <- InputEvent.enumerate(),
@@ -63,10 +60,15 @@ if Mix.target() != :host do
 
     def handle_info(_message, state), do: {:noreply, state}
 
-    # Value 1 is a press, 2 a key repeat while held, 0 a release.
+    # Value 1 is a press, 2 a repeat while held, 0 a release.
     defp handle_key({:ev_key, key, value}, state)
          when key in [:key_volumeup, :key_volumedown] and value in [1, 2] do
-      dispatch(if key == :key_volumeup, do: :volume_up, else: :volume_down)
+      level =
+        if key == :key_volumeup,
+          do: NervesPhone.Audio.Volume.up(),
+          else: NervesPhone.Audio.Volume.down()
+
+      Solve.dispatch(NervesPhone.State, :device, :volume_changed, level)
       state
     end
 
@@ -74,13 +76,8 @@ if Mix.target() != :host do
 
     defp handle_key({:ev_key, :key_power, 0}, %{power_down_at: down_at} = state)
          when down_at != nil do
-      if now() - down_at <= @tap_ms, do: dispatch(:toggle_play)
+      if now() - down_at <= @tap_ms, do: NervesPhone.Screen.toggle()
       %{state | power_down_at: nil}
-    end
-
-    defp handle_key({:ev_key, :key_playpause, 1}, state) do
-      dispatch(:toggle_play)
-      state
     end
 
     defp handle_key(_event, state), do: state
@@ -92,8 +89,6 @@ if Mix.target() != :host do
         true -> nil
       end
     end
-
-    defp dispatch(event), do: Solve.dispatch(NervesPhone.State, :player, event, nil)
 
     defp now, do: System.monotonic_time(:millisecond)
   end

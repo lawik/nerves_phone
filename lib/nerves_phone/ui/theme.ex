@@ -39,10 +39,6 @@ defmodule NervesPhone.UI.Theme do
     title_dim: {160, 192, 224},
     dock_from: {232, 240, 255},
     dock_to: {220, 228, 248},
-    list_ico_from: {96, 160, 255},
-    list_ico_to: {32, 96, 192},
-    pl_ico_from: {224, 80, 80},
-    pl_ico_to: {192, 48, 48},
     white: {255, 255, 255}
   }
 
@@ -90,50 +86,48 @@ defmodule NervesPhone.UI.Theme do
   end
 
   @doc """
-  Cover art from a downloaded file, or a placeholder until it's there.
-  Large covers fill the width.
+  An app's icon: its glyph in white on a rounded gradient square. `size`
+  is the square's side in points.
   """
-  def cover(path, size) do
-    large? = size >= 200
-
-    if path do
-      image(
-        [Border.rounded(s(2)) | if(large?, do: [width(fill())], else: square(size))],
-        {:path, path}
-      )
-    else
-      el(
-        [
-          Border.rounded(s(2)),
-          Background.color(gradient([c(:list_ico_from), c(:list_ico_to)], 45))
-        ] ++ square(size) ++ if(large?, do: [center_x()], else: []),
-        el([center_x(), center_y()], icon(:music, div(size, 2), c(:white, 0.85)))
-      )
-    end
-  end
-
-  defp square(size), do: [width(px(s(size))), height(px(s(size)))]
-
-  @doc "A small gradient square, like the window icons in the mockup."
-  def swatch(kind, size) do
-    {from, to} =
-      case kind do
-        :list -> {:list_ico_from, :list_ico_to}
-        :playlist -> {:pl_ico_from, :pl_ico_to}
-      end
-
+  def tile({from, to}, icon_name, size) do
     el(
       [
         width(px(s(size))),
         height(px(s(size))),
-        Border.rounded(s(2)),
-        Background.color(gradient([c(from), c(to)], 45))
-      ],
-      none()
+        Border.rounded(s(size * 0.22)),
+        Background.color(gradient([rgb(from), rgb(to)], 45))
+      ] ++ raised(),
+      el([center_x(), center_y()], icon(icon_name, round(size * 0.55), c(:white)))
     )
   end
 
-  @doc "A raised button. `opts`: `:primary`, `:selected`, `:fill`, `:color`, `:height`."
+  defp rgb({r, g, b}), do: color_rgb(r, g, b)
+
+  @doc "An on/off switch."
+  def switch(on?, on_press) do
+    Input.button(
+      [
+        width(px(s(52))),
+        height(px(s(30))),
+        padding(s(3)),
+        Border.rounded(s(15)),
+        Event.on_press(on_press),
+        Background.color(if on?, do: accent(), else: vgrad(:s3, :s4))
+      ] ++ sunken(),
+      el(
+        [
+          width(px(s(24))),
+          height(px(s(24))),
+          if(on?, do: align_right(), else: align_left()),
+          Border.rounded(s(12)),
+          Background.color(vgrad(:s0, :s1))
+        ] ++ raised(),
+        none()
+      )
+    )
+  end
+
+  @doc "A raised button with text or elements; a nil `on_press` disables it. `opts`: `:primary`, `:selected`, `:fill`, `:color`, `:height`."
   def button(content, on_press, opts \\ []) do
     Input.button(
       [
@@ -143,15 +137,23 @@ defmodule NervesPhone.UI.Theme do
         Font.size(s(13)),
         Font.color(Keyword.get(opts, :color, c(:text))),
         if(opts[:primary], do: Font.semi_bold(), else: Font.regular()),
-        if(opts[:fill], do: width(fill()), else: width(content())),
-        Event.on_press(on_press),
-        Interactive.mouse_down([Background.color(vgrad(:s3, :s2))])
+        if(opts[:fill], do: width(fill()), else: width(content()))
       ] ++
+        if(on_press,
+          do: [
+            Event.on_press(on_press),
+            Interactive.mouse_down([Background.color(vgrad(:s3, :s2))])
+          ],
+          else: []
+        ) ++
         if(opts[:selected],
           do: [Background.color(vgrad(:s2, :s3)) | pressed()],
           else: [Background.color(vgrad(:s4, :s5)) | raised()]
         ),
-      row([center_x(), center_y(), spacing(s(6))], List.wrap(content))
+      row(
+        [center_x(), center_y(), spacing(s(6))],
+        content |> List.wrap() |> Enum.map(&if(is_binary(&1), do: text(&1), else: &1))
+      )
     )
   end
 
@@ -198,37 +200,95 @@ defmodule NervesPhone.UI.Theme do
   end
 
   @doc """
-  A tappable list row: title, a dim line under it, and a value on the
-  right. `playing?` marks the row and adds the playing icon.
+  A tappable list row: title, a dim line under it, and on the right a value
+  (text) or an element. `selected?` marks the row with the accent and a
+  check.
   """
-  def list_row(key, on_press, title, meta, value, playing? \\ false) do
+  def list_row(key, on_press, title, meta, trailing, selected? \\ false) do
     Input.button(
       [
         key(key),
         width(fill()),
         padding_xy(s(12), s(10)),
         Border.width_each(0, 0, 1, 0),
-        Border.color(c(:text, 0.05)),
-        Event.on_press(on_press),
-        Interactive.mouse_down([Background.color(c(:acc_from, 0.08))])
-      ] ++ if(playing?, do: [Background.color(c(:acc_from, 0.06))], else: []),
+        Border.color(c(:text, 0.05))
+      ] ++
+        if(on_press,
+          do: [
+            Event.on_press(on_press),
+            Interactive.mouse_down([Background.color(c(:acc_from, 0.08))])
+          ],
+          else: []
+        ) ++ if(selected?, do: [Background.color(c(:acc_from, 0.06))], else: []),
       row([width(fill()), spacing(s(10))], [
         column([width(fill()), center_y(), spacing(s(3))], [
           el(
             [
               Font.size(s(14)),
-              Font.color(c(if playing?, do: :acc_from, else: :text)),
-              if(playing?, do: Font.medium(), else: Font.regular())
+              Font.color(c(if selected?, do: :acc_from, else: :text)),
+              if(selected?, do: Font.medium(), else: Font.regular())
             ],
             text(title)
           ),
           row([Font.size(s(11)), Font.light(), Font.color(c(:dim)), spacing(s(4))], [
-            if(playing?, do: el([center_y()], icon(:playing, 11, c(:acc_from))), else: none()),
+            if(selected?, do: el([center_y()], icon(:check, 11, c(:acc_from))), else: none()),
             text(meta)
           ])
         ]),
-        el([center_y(), Font.size(s(12)), Font.light(), Font.color(c(:dim))], text(value))
+        if(is_binary(trailing),
+          do:
+            el([center_y(), Font.size(s(12)), Font.light(), Font.color(c(:dim))], text(trailing)),
+          else: el([center_y()], trailing)
+        )
       ])
+    )
+  end
+
+  @doc "A label and its value, side by side, for reading."
+  def info_row(key, label_text, value) do
+    row(
+      [
+        key(key),
+        width(fill()),
+        padding_xy(s(12), s(9)),
+        spacing(s(12)),
+        Border.width_each(0, 0, 1, 0),
+        Border.color(c(:text, 0.05))
+      ],
+      [
+        el([align_top(), Font.size(s(13)), Font.color(c(:dim))], text(label_text)),
+        paragraph(
+          [width(fill()), Font.size(s(13)), Font.align_right(), Font.color(c(:text))],
+          [text(value)]
+        )
+      ]
+    )
+  end
+
+  @doc "A section label over rows, keyed like the rows around it."
+  def section(title) do
+    el(
+      [key({:section, title}), width(fill()), padding_each(s(14), s(12), s(4), s(12))],
+      label(title)
+    )
+  end
+
+  @doc "Four signal bars, `bars` of them lit."
+  def signal_bars(bars, tint, dim \\ c(:text, 0.15)) do
+    row(
+      [spacing(s(1)), height(px(s(12)))],
+      for i <- 1..4 do
+        el(
+          [
+            width(px(s(3))),
+            height(px(s(3 * i))),
+            align_bottom(),
+            Border.rounded(s(1)),
+            Background.color(if i <= (bars || 0), do: tint, else: dim)
+          ],
+          none()
+        )
+      end
     )
   end
 
@@ -249,19 +309,5 @@ defmodule NervesPhone.UI.Theme do
         )
       end
     )
-  end
-
-  def describe_error(reason)
-      when reason in [:nxdomain, :econnrefused, :ehostunreach, :enetunreach, :timeout],
-      do: "No internet connection."
-
-  def describe_error({:http, 401, _}), do: "The music service rejected the login."
-  def describe_error({:http, status, message}), do: "Error #{status}: #{message}"
-  def describe_error(reason), do: inspect(reason)
-
-  def clock(ms) do
-    seconds = div(ms, 1000)
-
-    "#{div(seconds, 60)}:#{seconds |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")}"
   end
 end

@@ -1,26 +1,23 @@
 defmodule NervesPhone.UI do
   @moduledoc """
-  The phone's main screen, an Emerge viewport: a music player laid out like
-  the mobile half of the "Windowed UI Concept".
+  The phone's screen, an Emerge viewport: a home screen of apps, and the
+  frame an app runs in.
 
-  Every playlist or album you open becomes a chip in the dock under the
-  toolbar, next to the playlists, search and what's playing:
+      ┌ title bar: app name ── downloads · network · battery ┐
+      │ toolbar (the app's, if it has one)            │
+      │ content: the home screen, or the app          │
+      └ [Back]  status                         [Home] ┘
 
-      ┌ titlebar ─────── volume · network · battery ┐
-      │ toolbar (changes with the view)             │
-      │ dock: [Playlists] [Search] [Playing] [Mix ×]│
-      │ content: playlists, tracks, search, playing │
-      │ mini player (except on Playing)             │
-      └ status bar ─────────────────────────────────┘
+  Home shows a tile for each app in `NervesPhone.App.all/0`. Back goes to
+  where the app says (`c:NervesPhone.App.back/0`), or home.
 
   It renders full screen on the FP3 panel through DRM, and opens a window
   when run on the host with `iex -S mix`. State lives in
   `NervesPhone.State`; this module only renders it and turns touches into
   events for its controllers.
 
-  Playback progress changes every poll. When that's all that changed and
-  the Playing view isn't on screen, nothing is re-rendered, so long lists
-  aren't rebuilt every two seconds.
+  Updates from the controllers of an app that isn't on screen don't
+  re-render, and nothing re-renders while the screen is off.
   """
 
   use Emerge
@@ -28,62 +25,105 @@ defmodule NervesPhone.UI do
 
   import NervesPhone.UI.Theme
 
-  alias NervesPhone.Music.Covers
-  alias NervesPhone.UI.{LibraryView, NowPlayingView, SearchView, TracksView}
+  alias NervesPhone.App
 
   @app NervesPhone.State
 
   @impl Viewport
   def mount(opts) do
-    File.mkdir_p!(Covers.dir())
-
     defaults =
       [
-        title: "Music",
+        title: "Nerves Phone",
         width: 432,
         height: 864,
         otp_app: :nerves_phone,
-        assets: [
-          fonts: fonts(),
-          # Covers are decoded at the size they're drawn, not their full
-          # 640 px.
-          decode_at_size: true,
-          # Cover art is downloaded at runtime. On the phone /data is a
-          # symlink to /root.
-          runtime_paths: [enabled: true, allowlist: [Covers.dir()], follow_symlinks: true]
-        ]
+        assets: [fonts: fonts()]
       ]
       |> Keyword.merge(Application.get_env(:nerves_phone, :viewport, []))
 
-    {:ok, %{player_seen: nil}, Keyword.merge(defaults, opts)}
+    {:ok, %{}, Keyword.merge(defaults, opts)}
   end
 
   @impl Viewport
   def render(_state) do
-    library = solve(@app, :library)
-    workspace = solve(@app, :workspace)
-    player = solve(@app, :player)
+    shell = solve(@app, :shell)
     device = solve(@app, :device)
+    downloads = solve(@app, :downloads)
+    app = shell.active
 
-    {toolbar, content, status} =
-      case workspace.active do
-        :library ->
-          {LibraryView.toolbar(library, workspace),
-           LibraryView.render(library, workspace, player), LibraryView.status(library)}
+    screen =
+      if app && App.fullscreen?(app) do
+        fullscreen(app, device)
+      else
+        framed(app, shell, device, downloads)
+      end
 
-        :search ->
-          {SearchView.toolbar(workspace), SearchView.render(workspace, player),
-           SearchView.status(workspace)}
+    oriented(device.orientation.orientation, screen)
+  end
 
-        :now_playing ->
-          {NowPlayingView.toolbar(workspace), NowPlayingView.render(player),
-           NowPlayingView.status(player)}
+  # The screen is laid out for a 432x864 pt portrait panel. Held sideways,
+  # it's laid out 864x432 and turned a quarter, with a layout-aware
+  # rotation, so touches land where things are drawn. Apps that lay out
+  # with fill() fit either way.
+  @portrait {432, 864}
 
-        _context ->
-          context = workspace.context
+  defp oriented(:portrait, screen), do: screen
 
-          {TracksView.toolbar(context, workspace, player),
-           TracksView.render(context, workspace, player), TracksView.status(context)}
+  defp oriented(side, screen) do
+    {short, long} = @portrait
+
+    el(
+      [width(fill()), height(fill())],
+      el(
+        [
+          width(px(s(long))),
+          height(px(s(short))),
+          rotate(if side == :landscape_left, do: 90, else: -90)
+        ],
+        screen
+      )
+    )
+  end
+
+  # The app on its own, edge to edge.
+  defp fullscreen(app, device) do
+    el(
+      [width(fill()), height(fill()), Font.family(font()), Background.color(color_rgb(0, 0, 0))] ++
+        if(device.screen_on, do: [], else: [Nearby.in_front(touch_catcher(device))]),
+      app.render()
+    )
+  end
+
+  defp framed(app, shell, device, downloads) do
+    {title, toolbar, content, status, back} =
+      if app do
+        {app.name(), app.toolbar(), app.render(), app.status(), app.back() || home(shell)}
+      else
+        {"Home", [], home_screen(shell), device.hostname, nil}
+      end
+
+    home = if app, do: home(shell)
+    content = el([width(fill()), height(fill()), Background.color(vgrad(:s0, :s1))], content)
+
+    body =
+      if device.orientation.orientation == :portrait do
+        [
+          titlebar(app, title, nil, device, downloads),
+          if(toolbar == [], do: none(), else: toolbar(toolbar)),
+          content,
+          nav_bar(back, status, home)
+        ]
+      else
+        # Sideways, height is short, so the toolbar and Back and Home move
+        # to the sides, and the status goes in the title bar.
+        [
+          titlebar(app, title, status, device, downloads),
+          row([width(fill()), height(fill())], [
+            if(toolbar == [], do: none(), else: toolbar_rail(toolbar)),
+            content,
+            nav_rail(back, home)
+          ])
+        ]
       end
 
     column(
@@ -94,19 +134,11 @@ defmodule NervesPhone.UI do
         Font.color(c(:text)),
         Background.color(c(:s4))
       ] ++ if(device.screen_on, do: [], else: [Nearby.in_front(touch_catcher(device))]),
-      [
-        titlebar(device, player),
-        toolbar(toolbar),
-        dock(workspace, player),
-        el([width(fill()), height(fill()), Background.color(vgrad(:s0, :s1))], content),
-        if(workspace.active != :now_playing and player.track,
-          do: mini_player(workspace, player),
-          else: none()
-        ),
-        status_bar({status, play_state(player)})
-      ]
+      body
     )
   end
+
+  defp home(shell), do: event(shell, :home, nil)
 
   # While the screen is off, a full-screen catcher takes the touch that
   # wakes it, so that touch doesn't also press what's underneath.
@@ -117,17 +149,54 @@ defmodule NervesPhone.UI do
     )
   end
 
-  defp play_state(player) do
-    cond do
-      player.pending -> "Starting…"
-      player.track && player.is_playing -> "Playing"
-      player.track -> "Paused"
-      player.device_ready -> "Ready"
-      true -> "Connecting…"
-    end
+  # ---------- Home ----------
+
+  # Four tiles a row.
+  defp home_screen(shell) do
+    tiles =
+      for app <- App.all() do
+        Input.button(
+          [
+            key(app),
+            width(px(s(96))),
+            padding_xy(0, s(8)),
+            Border.rounded(s(4)),
+            Event.on_press(event(shell, :open, app)),
+            Interactive.mouse_down([Background.color(c(:acc_from, 0.08))])
+          ],
+          column([center_x(), spacing(s(6))], [
+            el([center_x()], tile(app.tile(), app.icon(), 60)),
+            el([center_x(), Font.size(s(12)), Font.color(c(:text))], text(app.name()))
+          ])
+        )
+      end
+
+    el(
+      [width(fill()), height(fill()), padding_xy(s(12), s(20))],
+      wrapped_row([width(fill()), spacing_xy(s(8), s(16))], tiles)
+    )
   end
 
-  defp titlebar(device, player) do
+  # ---------- Title bar ----------
+
+  # The status is only in the title bar when the phone's held sideways.
+  defp titlebar(app, title, status, device, downloads) do
+    badge =
+      if app do
+        el([center_y()], tile(app.tile(), app.icon(), 22))
+      else
+        el(
+          [
+            width(px(s(22))),
+            height(px(s(22))),
+            center_y(),
+            Border.rounded(s(3)),
+            Background.color(c(:white, 0.18))
+          ],
+          el([center_x(), center_y()], icon(:apps, 13, c(:white)))
+        )
+      end
+
     row(
       [
         width(fill()),
@@ -138,25 +207,36 @@ defmodule NervesPhone.UI do
         Border.shadow(offset: {0, s(1)}, blur: s(3), color: c(:text, 0.12))
       ],
       [
-        el(
-          [
-            width(px(s(22))),
-            height(px(s(22))),
-            center_y(),
-            Border.rounded(s(3)),
-            Background.color(gradient([c(:list_ico_from), c(:list_ico_to)], 45))
-          ],
-          el([center_x(), center_y()], icon(:music, 13, c(:white)))
-        ),
-        el(
-          [center_y(), width(fill()), Font.size(s(16)), Font.semi_bold(), Font.color(c(:white))],
-          text("Music")
-        ),
-        volume_indicator(player),
+        badge,
+        row([center_y(), width(fill()), spacing(s(14))], [
+          el(
+            [center_y(), Font.size(s(16)), Font.semi_bold(), Font.color(c(:white))],
+            text(title)
+          ),
+          if(status,
+            do: el([center_y(), Font.size(s(12)), Font.color(c(:white, 0.75))], text(status)),
+            else: none()
+          )
+        ]),
+        downloads_indicator(downloads),
+        volume_indicator(device),
         network_indicator(device.network),
         battery_indicator(device.battery)
       ]
     )
+  end
+
+  # The number of downloads, and the oldest's percentage when it reports
+  # one: "2 · 45%".
+  defp downloads_indicator(%{count: 0}), do: none()
+
+  defp downloads_indicator(%{count: count, percent: percent}) do
+    label = if percent, do: "#{count} · #{percent}%", else: "#{count}"
+
+    row([center_y(), spacing(s(4))], [
+      el([center_y()], icon(:download, 16, c(:white))),
+      el([center_y(), Font.size(s(11)), Font.color(c(:white))], text(label))
+    ])
   end
 
   # Set with the volume buttons.
@@ -190,27 +270,12 @@ defmodule NervesPhone.UI do
 
     row([center_y(), spacing(s(4))], [
       if(show_icon?, do: el([center_y()], icon(icon_name, 16, tint)), else: none()),
-      if(network.bars, do: el([center_y()], signal_bars(network.bars, tint)), else: none()),
+      if(network.bars,
+        do: el([center_y()], signal_bars(network.bars, tint, c(:white, 0.3))),
+        else: none()
+      ),
       el([center_y(), Font.size(s(11)), Font.color(tint)], text(label))
     ])
-  end
-
-  defp signal_bars(bars, tint) do
-    row(
-      [spacing(s(1)), height(px(s(12)))],
-      for i <- 1..4 do
-        el(
-          [
-            width(px(s(3))),
-            height(px(s(3 * i))),
-            align_bottom(),
-            Border.rounded(s(1)),
-            Background.color(if i <= bars, do: tint, else: c(:white, 0.3))
-          ],
-          none()
-        )
-      end
-    )
   end
 
   defp battery_indicator(nil), do: none()
@@ -264,6 +329,8 @@ defmodule NervesPhone.UI do
     ])
   end
 
+  # ---------- Toolbar ----------
+
   defp toolbar(items) do
     row(
       [
@@ -274,11 +341,28 @@ defmodule NervesPhone.UI do
         Border.width_each(0, 0, 1, 0),
         Border.color(c(:text, 0.06))
       ],
-      Enum.map(items, &tool/1)
+      Enum.map(items, &tool(&1, :bar))
     )
   end
 
-  defp tool(:separator) do
+  # The toolbar down the left side, when the phone's held sideways.
+  defp toolbar_rail(items) do
+    column(
+      [
+        width(px(s(84))),
+        height(fill()),
+        padding(s(4)),
+        spacing(s(3)),
+        scrollbar_y(),
+        Background.color(vgrad(:s4, :s5)),
+        Border.width_each(0, 1, 0, 0),
+        Border.color(c(:text, 0.06))
+      ],
+      Enum.map(items, &tool(&1, :rail))
+    )
+  end
+
+  defp tool(:separator, :bar) do
     el(
       [
         width(px(1)),
@@ -291,17 +375,35 @@ defmodule NervesPhone.UI do
     )
   end
 
-  defp tool({icon_name, label, on_press, active?}) do
+  defp tool(:separator, :rail) do
+    el(
+      [
+        width(fill()),
+        height(px(1)),
+        Background.color(c(:text, 0.08)),
+        Border.shadow(offset: {0, 1}, blur: 0, color: c(:white, 0.3))
+      ],
+      none()
+    )
+  end
+
+  defp tool({icon_name, label, on_press, active?}, place) do
     tint = if active?, do: c(:text), else: c(:dim)
 
+    size =
+      case place do
+        # Up to 76 wide, narrower when a page has more tools than fit.
+        :bar -> [width(Emerge.UI.Size.min(px(s(76)), fill())), height(px(s(54)))]
+        :rail -> [width(fill()), height(px(s(44)))]
+      end
+
     Input.button(
-      [
-        width(px(s(76))),
-        height(px(s(54))),
-        Border.rounded(s(2)),
-        Event.on_press(on_press),
-        Interactive.mouse_down(pressed())
-      ] ++ if(active?, do: [Background.color(vgrad(:s2, :s3)) | pressed()], else: []),
+      size ++
+        [
+          Border.rounded(s(2)),
+          Event.on_press(on_press),
+          Interactive.mouse_down(pressed())
+        ] ++ if(active?, do: [Background.color(vgrad(:s2, :s3)) | pressed()], else: []),
       column([center_x(), center_y(), spacing(s(3))], [
         el([center_x()], icon(icon_name, 20, tint)),
         el(
@@ -309,8 +411,7 @@ defmodule NervesPhone.UI do
             center_x(),
             Font.size(s(10)),
             Font.medium(),
-            Font.color(tint),
-            Font.letter_spacing(0.5)
+            Font.color(tint)
           ],
           text(String.upcase(label))
         )
@@ -318,206 +419,89 @@ defmodule NervesPhone.UI do
     )
   end
 
-  # The open items dock: the playlists first, then search and what's
-  # playing once used, then each opened playlist or album. It scrolls
-  # sideways when there are more chips than fit.
-  defp dock(workspace, player) do
-    active = workspace.active
+  # ---------- Bottom bar ----------
 
-    fixed =
-      [chip(:list, "Playlists", active == :library, event(workspace, :show, :library))] ++
-        if(workspace.search_open,
-          do: [
-            chip(
-              :search,
-              "Search",
-              active == :search,
-              event(workspace, :show, :search),
-              event(workspace, :close, :search)
-            )
-          ],
-          else: []
-        ) ++
-        if(player.track,
-          do: [
-            chip(
-              :playing,
-              "Playing",
-              active == :now_playing,
-              event(workspace, :show, :now_playing)
-            )
-          ],
-          else: []
-        )
-
-    contexts =
-      for context <- workspace.open do
-        chip(
-          {context.kind, context.uri == player.context_uri},
-          context.name,
-          active == context.key,
-          event(workspace, :show, context.key),
-          event(workspace, :close, context.key)
-        )
-      end
-
-    el(
-      [width(fill()), scrollbar_x(), Background.color(vgrad(:s5, :s4))] ++ sunken(),
-      row([padding_xy(s(8), s(6)), spacing(s(5))], fixed ++ contexts)
-    )
-  end
-
-  defp chip(kind, label, active?, on_press, on_close \\ nil) do
-    tint = if active?, do: c(:acc_from), else: c(:text)
-
-    marker =
-      case kind do
-        :list -> swatch(:list, 12)
-        :search -> icon(:search, 14, tint)
-        :playing -> icon(:music, 14, tint)
-        {_kind, true} -> icon(:playing, 14, c(:acc_from))
-        {:album, false} -> icon(:album, 14, tint)
-        {:playlist, false} -> swatch(:playlist, 12)
-      end
-
-    close =
-      if on_close do
-        [
-          Input.button(
-            [
-              width(px(s(28))),
-              height(px(s(28))),
-              center_y(),
-              Border.rounded(s(2)),
-              Event.on_press(on_close),
-              Interactive.mouse_down([Background.color(c(:text, 0.08))])
-            ],
-            el([center_x(), center_y()], icon(:close, 12, if(active?, do: tint, else: c(:faint))))
-          )
-        ]
-      else
-        []
-      end
-
-    row(
-      [
-        height(px(s(44))),
-        padding_each(0, if(on_close, do: s(4), else: s(14)), 0, s(12)),
-        spacing(s(6)),
-        Border.rounded(s(2)),
-        Background.color(if active?, do: vgrad(:dock_from, :dock_to), else: vgrad(:s0, :s1))
-      ] ++
-        if(active?,
-          do: pressed() ++ [Border.glow(c(:acc_from, 0.25), s(1))],
-          else: raised()
-        ),
-      [
-        Input.button(
-          [height(fill()), Event.on_press(on_press)],
-          row([center_y(), spacing(s(6))], [
-            el([center_y()], marker),
-            el(
-              [
-                center_y(),
-                Font.size(s(13)),
-                Font.color(tint),
-                if(active?, do: Font.medium(), else: Font.regular())
-              ],
-              text(label)
-            )
-          ])
-        )
-        | close
-      ]
-    )
-  end
-
-  # What's playing, with play/pause and next. Tapping it opens Playing.
-  defp mini_player(workspace, player) do
+  # Back and Home around the status. On the home screen there's nowhere to
+  # go, so both are dimmed.
+  defp nav_bar(back, status, home) do
     row(
       [
         width(fill()),
-        padding_xy(s(10), s(6)),
-        spacing(s(8)),
-        Background.color(vgrad(:dock_from, :dock_to)),
+        padding(s(4)),
+        spacing(s(4)),
+        Background.color(vgrad(:s4, :s5)),
         Border.width_each(1, 0, 0, 0),
-        Border.color(c(:acc_from, 0.15))
+        Border.color(c(:text, 0.06))
       ],
       [
-        Input.button(
-          [width(fill()), Event.on_press(event(workspace, :show, :now_playing))],
-          column([width(fill()), spacing(s(2))], [
-            el(
-              [Font.size(s(13)), Font.medium(), Font.color(c(:acc_from))],
-              text(player.track.name)
-            ),
-            el([Font.size(s(11)), Font.light(), Font.color(c(:dim))], text(player.track.artists))
-          ])
+        nav_button(:back, back),
+        el(
+          [
+            width(fill()),
+            height(px(s(44))),
+            padding_xy(s(10), 0),
+            Border.rounded(s(2)),
+            Background.color(vgrad(:s2, :s3)),
+            Font.size(s(11)),
+            Font.light(),
+            Font.color(c(:dim))
+          ] ++ sunken(),
+          el([center_y()], text(status))
         ),
-        mini_button(
-          if(player.is_playing, do: :pause, else: :play),
-          event(player, :toggle_play, nil)
-        ),
-        mini_button(:next, event(player, :next, nil))
+        nav_button(:home, home)
       ]
     )
   end
 
-  defp mini_button(icon_name, on_press) do
+  # Back at the top and Home at the bottom of the right side, when the
+  # phone's held sideways.
+  defp nav_rail(back, home) do
+    column(
+      [
+        height(fill()),
+        padding(s(4)),
+        Background.color(vgrad(:s4, :s5)),
+        Border.width_each(0, 0, 0, 1),
+        Border.color(c(:text, 0.06))
+      ],
+      [nav_button(:back, back), el([height(fill())], none()), nav_button(:home, home)]
+    )
+  end
+
+  defp nav_button(icon_name, nil) do
+    el(
+      [width(px(s(56))), height(px(s(44))), Border.rounded(s(2))],
+      el([center_x(), center_y()], icon(icon_name, 20, c(:faint)))
+    )
+  end
+
+  defp nav_button(icon_name, on_press) do
     Input.button(
       [
-        width(px(s(44))),
+        width(px(s(56))),
         height(px(s(44))),
-        center_y(),
-        Border.rounded(s(22)),
-        Event.on_press(on_press),
-        Interactive.mouse_down([Background.color(c(:acc_from, 0.12))])
-      ],
-      el([center_x(), center_y()], icon(icon_name, 20, c(:acc_from)))
-    )
-  end
-
-  defp status_bar({main, side}) do
-    row(
-      [width(fill()), padding(s(3)), spacing(s(2)), Background.color(vgrad(:s4, :s5))],
-      [status_cell(main, fill(3)), status_cell(side, fill(1))]
-    )
-  end
-
-  defp status_cell(value, size) do
-    el(
-      [
-        width(size),
-        padding_xy(s(8), s(6)),
         Border.rounded(s(2)),
-        Background.color(vgrad(:s2, :s3)),
-        Font.size(s(11)),
-        Font.light(),
-        Font.color(c(:dim))
-      ] ++ sunken(),
-      text(value)
+        Background.color(vgrad(:s0, :s1)),
+        Event.on_press(on_press),
+        Interactive.mouse_down([Background.color(vgrad(:s3, :s2)) | pressed()])
+      ] ++ raised(),
+      el([center_x(), center_y()], icon(icon_name, 20, c(:text)))
     )
   end
 
-  # Skip the re-render when only playback progress moved and it isn't
-  # shown, and while the screen is off (waking re-renders).
+  # Skip the re-render while the screen is off (waking re-renders), and when
+  # only apps that aren't on screen changed.
   @impl Solve.Lookup
   def handle_solve_updated(updated, state) do
-    player = solve(@app, :player)
-    seen = Map.delete(player, :progress_ms)
     refs = updated |> Map.values() |> Enum.flat_map(& &1.refs)
     screen_off? = not solve(@app, :device).screen_on
+    active = solve(@app, :shell).active
+    hidden = for app <- App.all(), app != active, name <- App.controller_names(app), do: name
 
     cond do
-      screen_off? and :device not in refs ->
-        {:ok, state}
-
-      refs == [:player] and seen == state.player_seen and
-          solve(@app, :workspace).active != :now_playing ->
-        {:ok, state}
-
-      true ->
-        {:ok, Viewport.rerender(%{state | player_seen: seen})}
+      screen_off? and :device not in refs -> {:ok, state}
+      refs != [] and Enum.all?(refs, &(&1 in hidden)) -> {:ok, state}
+      true -> {:ok, Viewport.rerender(state)}
     end
   end
 end

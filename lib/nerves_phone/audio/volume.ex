@@ -7,8 +7,8 @@ defmodule NervesPhone.Audio.Volume do
   alsa-lib applies the gain (no per-sample work in Elixir). The level is
   set with `amixer` from this process, so a button press never waits on it,
   and only the latest level is applied when presses come fast. The control
-  only exists once the device has been opened, so applying retries until it
-  works. On the host (no `volume_control` set) the level is only kept.
+  only exists once the device has been opened, so the player calls
+  `reapply/0` when sound starts. On the host (no `volume_control` set) the level is only kept.
 
   The current level lives in an `:atomics` counter for cheap reads and is
   saved to `state_dir/volume` so it outlasts reboots. Levels go from 0 to
@@ -19,7 +19,6 @@ defmodule NervesPhone.Audio.Volume do
 
   @steps 16
   @default 10
-  @retry_ms 2_000
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -40,6 +39,9 @@ defmodule NervesPhone.Audio.Volume do
   def up, do: set(level() + 1)
   def down, do: set(level() - 1)
 
+  @doc "Applies the level again (once the sound device has been opened)."
+  def reapply, do: GenServer.cast(__MODULE__, :reapply)
+
   @impl GenServer
   def init(_opts) do
     send(self(), :apply)
@@ -48,6 +50,7 @@ defmodule NervesPhone.Audio.Volume do
 
   @impl GenServer
   def handle_cast(:apply, state), do: handle_info(:apply, state)
+  def handle_cast(:reapply, state), do: handle_info(:apply, %{state | applied: nil})
 
   @impl GenServer
   def handle_info(:apply, state) do
@@ -62,8 +65,8 @@ defmodule NervesPhone.Audio.Volume do
         :ok ->
           {:noreply, %{state | applied: level}}
 
+        # The control isn't there until sound has played; reapply/0.
         {:error, _reason} ->
-          Process.send_after(self(), :apply, @retry_ms)
           {:noreply, state}
       end
     end
@@ -103,7 +106,7 @@ defmodule NervesPhone.Audio.Volume do
   end
 
   defp save(level) do
-    File.mkdir_p(NervesPhone.Music.state_dir())
+    File.mkdir_p(NervesPhone.state_dir())
     File.write(path(), Integer.to_string(level))
   end
 
@@ -116,5 +119,5 @@ defmodule NervesPhone.Audio.Volume do
     end
   end
 
-  defp path, do: Path.join(NervesPhone.Music.state_dir(), "volume")
+  defp path, do: Path.join(NervesPhone.state_dir(), "volume")
 end

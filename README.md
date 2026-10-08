@@ -1,127 +1,74 @@
 # NervesPhone
 
 Nerves firmware for the Fairphone 3 / 3+, built on
-[`nerves_system_fp3`](https://github.com/mlainez/nerves_system_fp3): a plain
-music player. Browse your playlists, open one and pick a track, or search for
-songs, albums and playlists. Playback is always shuffled, never "smart"
-shuffled, and there are no recommendations or other extras.
+[`nerves_system_fp3`](https://github.com/mlainez/nerves_system_fp3): a small
+mobile OS. A home screen of apps, a title bar with the network and battery,
+and Back and Home at the bottom. Settings is the one app there is.
 
-* The UI is drawn with [Emerge](https://hexdocs.pm/emerge) on the CPU, straight
-  to the panel through DRM, laid out like the mobile half of the "Windowed UI
-  Concept": every playlist or album you open is a chip in a dock under the
-  toolbar.
+* The UI is drawn with [Emerge](https://hexdocs.pm/emerge), straight to the
+  panel through DRM, in the look of the "Windowed UI Concept": warm grey
+  surfaces, a blue accent, raised buttons and sunken wells.
 * State lives in [Solve](https://hexdocs.pm/solve) controllers.
-* The music service is a backend behind `NervesPhone.Music.Backend`. Spotify
-  is the one there is: [librespot](https://github.com/librespot-org/librespot)
-  streams, and its PCM runs through a [Membrane](https://membrane.stream)
-  pipeline to PortAudio.
+* [Membrane](https://membrane.stream) is in for media pipelines, though
+  nothing uses it yet.
 
 ## Using it
 
-* **Playlists:** your whole library in one scrolling list, All or Mine. Tap one
-  to open it.
-* **A playlist or album:** its tracks. Tap a track to play from it, or "Shuffle
-  play" to start at a random one.
-* **Search:** an on-screen keyboard; results come in as you pause typing.
-  Songs play their album from that song; albums and playlists open.
-* **Playing:** cover art, progress, previous / play-pause / next. A mini player
-  with play/pause and next sits above the status bar everywhere else.
-* **Buttons:** volume up/down set the volume (the speaker icon in the title
-  bar shows it), and a tap on power plays/pauses, as does a headset's button.
-* **Screen:** goes dark after 30 s without touches. The next touch wakes it,
-  and doesn't press anything.
-* **Title bar:** volume, network (Wi-Fi bars, mobile, USB, offline) and battery.
+* **Home:** a tile per app. Tap one to open it.
+* **Title bar:** the app's name, the network (Wi-Fi bars, mobile, Ethernet,
+  USB, offline) and the battery.
+* **Bottom bar:** Back (to the app's previous page, or home), what the app is
+  doing, and Home.
+* **Settings:**
+  * *Wi-Fi:* turn it on or off, see the network it's on (and forget it), and
+    the networks around. Tap an open network to join it; a protected one asks
+    for its password on an on-screen keyboard. Scan looks again.
+  * *Network:* each interface's status, addresses and MAC, and the name
+    servers.
+  * *Display:* brightness on a slider, or automatic, following the light
+    the front camera measures. When the screen dims and when it goes black.
+  * *Device:* model, hostname, serial number, firmware, kernel, uptime,
+    memory, storage and battery.
+* **Buttons:** a tap on power turns the screen off or on.
+* **Screen:** dims after 30 s without touches and goes black after a minute
+  (both set in Settings), fading each time. A touch on the dimmed screen
+  brightens it; the touch that wakes a black one doesn't press anything.
 
-## How it fits together
+## Apps
+
+An app is a module implementing `NervesPhone.App`, listed in
+`config :nerves_phone, apps: [...]`. It names itself and its tile, brings its
+own Solve controllers (they join `NervesPhone.State`), and renders its
+toolbar, content and status line. `NervesPhone.Apps.Settings` is the example.
 
 ```
-NervesPhone.UI (Emerge)  <->  Solve: library · workspace · player · device
-                                        |
-                              NervesPhone.Music.Backend
-                                        |
-                  NervesPhone.Spotify: Web API (lists, search, control)
-                                       librespot (Connect device) --PCM--> FIFO
-                                                                            |
-                         Membrane: FifoSource --> PortAudio.Sink --> ALSA softvol --> speaker
+NervesPhone.UI (Emerge)  <->  Solve: shell · device · each app's controllers
+                                                |
+                                         NervesPhone.Net (VintageNet)
 ```
 
-* The Web API lists, searches and controls playback but never delivers
-  audio. librespot signs in as a Spotify Connect device and streams; the app
-  tells Spotify to play on it, and Membrane plays what librespot decodes.
-  Reading the FIFO on demand is what paces librespot.
-* Every call to the service runs in a task, so neither the UI nor its state
-  ever waits on the network.
-* Playback progress changes every poll; when that's all that changed and
-  Playing isn't on screen, the UI doesn't re-render. Nothing re-renders while
-  the screen is off.
-
-### Always shuffle, never smart shuffle
-
-* Playback starts with plain shuffle and repeat-context on, so a playlist or
-  album never runs out.
-* librespot runs with `--autoplay off`, so nothing gets appended, and
-  librespot has no smart shuffle at all.
-* Every poll (2 s) checks playback is still on plain shuffle and turns it
-  back on if another app changed it.
-
-### Caching
-
-* **Playlists and track lists** are JSON in `state_dir/<backend>/` (on the
-  phone `/data/music/spotify/playlists.json` and `tracks/...`). They show
-  from disk at once, then are fetched again in the background; the fresh
-  copy replaces what's shown, and is saved, only when it differs. Track
-  lists fetch 50 tracks a request and, without a cache, show as pages arrive.
-* **Cover art** (Playing only) is downloaded on demand into
-  `state_dir/covers`, one file at a time, named by a hash of the URL and
-  trimmed to the newest 500 at start.
+Updates from an app that isn't on screen don't re-render, and nothing
+re-renders while the screen is off.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `lib/nerves_phone/ui.ex` | The main screen: title bar, toolbar, dock, mini player, status bar |
-| `lib/nerves_phone/ui/*_view.ex` | Playlists, a playlist/album's tracks, search (with keyboard), Playing |
+| `lib/nerves_phone/ui.ex` | The screen: title bar, home, toolbar, bottom bar |
 | `lib/nerves_phone/ui/theme.ex` | Colours, scaling and shared widgets |
-| `lib/nerves_phone/state/` | Solve controllers: library, workspace (dock, track lists, search), player, device |
-| `lib/nerves_phone/music/` | The backend behaviour, the JSON cache, the cover cache |
-| `lib/nerves_phone/spotify.ex`, `spotify/` | The Spotify backend: token store, Web API client, librespot |
-| `lib/nerves_phone/audio/` | The FIFO source, the Membrane pipeline and its keeper, volume |
-| `lib/nerves_phone/buttons.ex`, `screen.ex` | Hardware buttons and touch activity; the screen timeout |
-| `lib/mix/tasks/spotify.login.ex` | `mix spotify.login` |
-| `mix.exs` | Also builds librespot (`Mix.Tasks.Compile.Librespot`) and trims the release |
-| `rootfs_overlay/etc/asound.conf` | The ALSA software volume control |
+| `lib/nerves_phone/ui/keyboard.ex` | The on-screen keyboard |
+| `lib/nerves_phone/app.ex` | The app behaviour |
+| `lib/nerves_phone/apps/` | The apps: Settings and its controller |
+| `lib/nerves_phone/state/` | Solve controllers: shell (which app is open), device |
+| `lib/nerves_phone/net.ex` | The network through VintageNet, with a stand-in on the host |
+| `lib/nerves_phone/device_info.ex` | Facts about the phone for Settings |
+| `lib/nerves_phone/buttons.ex` | Hardware buttons and touch activity |
+| `lib/nerves_phone/screen.ex` | Brightness, dimming and turning off, with fades |
+| `lib/nerves_phone/light_sensor.ex` | Ambient light from the front camera |
+| `mix.exs` | Also trims the release |
 | `priv/fonts`, `priv/icons` | IBM Plex Sans (OFL, see `LICENSE.txt`) and SVG icons |
 | `config/fp3.exs` | Phone config: display, networking, audio, screen timeout, partition grow |
 | `scripts/flash-fp3.sh` | First-time flashing over USB |
-
-## Spotify setup
-
-You need Spotify Premium, both for the Web API in development mode (the app
-owner's account) and for librespot to stream.
-
-1. Create an app at https://developer.spotify.com/dashboard. Tick "Web API"
-   and add `http://127.0.0.1:8888/callback` as a redirect URI.
-2. Log in from the project directory:
-
-   ```sh
-   mix spotify.login --client-id YOUR_CLIENT_ID
-   ```
-
-   This logs in twice in your browser: once for the Web API with your app,
-   and once for librespot with librespot's own client ID (Spotify Connect
-   refuses credentials made from another app's token). Both end up in
-   `.spotify.json`, which is gitignored and can control your account, so
-   keep it private. `--librespot-only` redoes just the second step.
-3. Rebuild. The login is read at build time. On first boot the librespot
-   credentials are written to its cache in `state_dir/librespot`
-   (`/data/spotify` on the phone).
-
-Without librespot credentials, the phone still shows up as "Nerves Phone" in
-any Spotify app on the same network. Pick it there once to sign it in.
-
-In development mode, Spotify only returns the track lists of playlists you
-own or collaborate on. That doesn't matter here: playback is started by
-playlist URI, so playlists you follow play too.
 
 ## Running on the host
 
@@ -130,22 +77,21 @@ mix deps.get
 iex -S mix
 ```
 
-The first compile builds librespot with cargo (a minute or two). The UI opens
-in a window and audio plays on the default output device. The phone's
-hardware libraries are only included in target builds.
+The UI opens in a window. There's no VintageNet on the host, so
+`NervesPhone.Net` stands in with a few sample networks; joining, forgetting
+and turning Wi-Fi off work on those. The phone's hardware libraries are only
+included in target builds.
 
-`mix test` runs the controllers against a fake music backend and renders the
-screens headless with the CPU raster renderer. Set `UI_SNAPSHOT_DIR=some/dir`
-to save them as PNGs.
+`mix test` runs the controllers and renders the screens headless with the
+CPU raster renderer. Set `UI_SNAPSHOT_DIR=some/dir` to save them as PNGs.
 
 ## Building for the phone
 
 Prerequisites:
 
 * Erlang/OTP and Elixir from `.tool-versions`, and the `nerves_bootstrap` archive.
-* A Rust toolchain with the `aarch64-unknown-linux-gnu` target. librespot and
-  the `arm_ai` NIF in the AI stack are built from source; librespot is
-  cross-compiled with the Nerves toolchain. Emerge's renderer and PortAudio
+* A Rust toolchain with the `aarch64-unknown-linux-gnu` target: the `arm_ai`
+  NIF in the AI stack is built from source. Emerge's renderer and PortAudio
   are prebuilt.
 * An SSH public key in `~/.ssh`. It's baked into the firmware.
 
@@ -189,11 +135,19 @@ After that, update over the network with `mix upload`.
   dark, list the outputs with `EmergeSkia.drm_outputs(drm_card: "/dev/dri/card1")`
   and change `drm_card` in `config/fp3.exs`. `ui_scale` scales
   sizes for the panel's ~430 dpi.
-* **Network.** Spotify needs the phone online: build with `FP3_WIFI_SSID` /
-  `FP3_WIFI_PASSPHRASE`, or use cellular with `FP3_APN`.
-* **Sound.** PortAudio plays on ALSA's default device. `ex_audio` routes the
-  FP3+ loudspeaker at boot (`config :ex_audio` in `config/fp3.exs`). The
-  original FP3's amplifier needs different mixer controls.
+* **Network.** Join Wi-Fi from Settings, or build with `FP3_WIFI_SSID` /
+  `FP3_WIFI_PASSPHRASE` to join one on first boot. Cellular needs `FP3_APN`.
+  Turning Wi-Fi off keeps its settings in `/data/phone/wlan0.config`.
+* **Sound.** `ex_audio` routes the FP3+ loudspeaker at boot
+  (`config :ex_audio` in `config/fp3.exs`). The original FP3's amplifier
+  needs different mixer controls.
+* **Brightness.** The panel's backlight is `/sys/class/backlight/*`
+  (0..4095 on the FP3). There's no ambient light sensor the kernel exposes,
+  so automatic brightness takes two small frames from the front camera
+  about once a minute while the screen is fully on (about 1.2 s of
+  `cam-snap`), and measures how fast the signal rises with exposure. See
+  `NervesPhone.LightSensor` for how, and `config :nerves_phone,
+  :light_sensor, dark: ..., bright: ...` to recalibrate.
 * **Hardware libraries**, all started at boot: `ex_qcom_smgr` (sensors),
   `fp3_camera`, `ex_audio`, `ex_nfc`, `ex_location` (GPS), `blue_heron`
   (Bluetooth LE), `fp3_modem` / `vintage_net_qmi` (cellular), `input_event`

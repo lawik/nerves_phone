@@ -18,25 +18,8 @@ config :nerves, :firmware, rootfs_overlay: "rootfs_overlay"
 
 config :nerves, source_date_epoch: "1791054690"
 
-# Spotify login, written by `mix spotify.login`. The refresh token seeds the
-# token store on first start; after that the refreshed token is kept in
-# the :spotify `state_dir`.
-spotify_login = Path.expand("../.spotify.json", __DIR__)
-
-if File.exists?(spotify_login) do
-  login = spotify_login |> File.read!() |> JSON.decode!()
-
-  config :nerves_phone, :spotify,
-    client_id: login["client_id"],
-    refresh_token: login["refresh_token"],
-    librespot_credentials: login["librespot_credentials"]
-end
-
-# The music service behind the player (see NervesPhone.Music.Backend).
-config :nerves_phone, music_backend: NervesPhone.Spotify
-
-# The name the phone shows up as in Spotify Connect.
-config :nerves_phone, :spotify, device_name: "Nerves Phone"
+# The apps on the home screen, in order. Each is a NervesPhone.App.
+config :nerves_phone, apps: [NervesPhone.Apps.Videos, NervesPhone.Apps.Settings]
 
 if Mix.target() == :host do
   import_config "host.exs"
