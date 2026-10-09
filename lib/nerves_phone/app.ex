@@ -48,12 +48,18 @@ defmodule NervesPhone.App do
   @callback opened() :: any()
 
   @doc """
+  Called in the shell controller when the schedule closes the app
+  (`NervesPhone.Schedule`), to stop what it's doing, such as playing.
+  """
+  @callback closed() :: any()
+
+  @doc """
   Whether the app takes the whole screen right now (a playing video, say):
   no title bar, toolbar or bottom bar, so it brings its own way back.
   """
   @callback fullscreen?() :: boolean()
 
-  @optional_callbacks opened: 0, fullscreen?: 0
+  @optional_callbacks opened: 0, closed: 0, fullscreen?: 0
 
   @doc "Whether `app` wants the whole screen now."
   def fullscreen?(app), do: function_exported?(app, :fullscreen?, 0) and app.fullscreen?()

@@ -16,6 +16,8 @@ defmodule NervesPhone.State.Device do
   alias NervesPhone.{DeviceInfo, Net}
 
   @poll_ms 5_000
+  # The volume overlay stays this long after the last press.
+  @volume_overlay_ms 1_500
 
   @impl Solve.Controller
   def init(_params, _dependencies) do
@@ -32,6 +34,9 @@ defmodule NervesPhone.State.Device do
       display: nil,
       volume: NervesPhone.Audio.Volume.level(),
       volume_steps: NervesPhone.Audio.Volume.steps(),
+      # Shown for a moment after the volume buttons change the volume.
+      volume_overlay: false,
+      volume_overlay_gen: 0,
       orientation: %{orientation: :portrait, mode: :auto, sensor: false}
     }
   end
@@ -40,7 +45,11 @@ defmodule NervesPhone.State.Device do
 
   def display_changed(display, state) when is_map(display), do: %{state | display: display}
 
-  def volume_changed(level, state) when is_integer(level), do: %{state | volume: level}
+  def volume_changed(level, state) when is_integer(level) do
+    gen = state.volume_overlay_gen + 1
+    Process.send_after(self(), {:hide_volume_overlay, gen}, @volume_overlay_ms)
+    %{state | volume: level, volume_overlay: true, volume_overlay_gen: gen}
+  end
 
   def orientation_changed(orientation, state) when is_map(orientation),
     do: %{state | orientation: orientation}
@@ -51,6 +60,11 @@ defmodule NervesPhone.State.Device do
     NervesPhone.Screen.touch()
     state
   end
+
+  def handle_info({:hide_volume_overlay, gen}, %{volume_overlay_gen: gen} = state),
+    do: %{state | volume_overlay: false}
+
+  def handle_info({:hide_volume_overlay, _stale}, state), do: state
 
   def handle_info(:poll, state) do
     Process.send_after(self(), :poll, @poll_ms)

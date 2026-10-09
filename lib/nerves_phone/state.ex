@@ -6,7 +6,9 @@ defmodule NervesPhone.State do
   controllers it renders with `Solve.Lookup.solve/2` and sends events back
   with `Solve.Lookup.event/3`.
 
-    * `:shell` - which app is on screen
+    * `:shell` - which app is on screen, and which can be opened
+    * `:schedule` - which apps the schedule allows now
+      (`NervesPhone.Schedule`)
     * `:device` - battery, network and screen status for the title bar
     * `:downloads` - the downloads in progress, for the title bar
     * and each app's own (see `NervesPhone.App`)
@@ -15,12 +17,13 @@ defmodule NervesPhone.State do
   use Solve
 
   alias NervesPhone.App
-  alias NervesPhone.State.{Device, Downloads, Shell}
+  alias NervesPhone.State.{Device, Downloads, Schedule, Shell}
 
   @impl Solve
   def controllers do
     [
-      controller!(name: :shell, module: Shell),
+      controller!(name: :schedule, module: Schedule),
+      controller!(name: :shell, module: Shell, dependencies: [:schedule]),
       controller!(name: :device, module: Device),
       controller!(name: :downloads, module: Downloads)
     ] ++ for(app <- App.all(), spec <- app.controllers(), do: controller!(spec))

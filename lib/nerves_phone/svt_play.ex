@@ -23,6 +23,8 @@ defmodule NervesPhone.SvtPlay do
 
   require Logger
 
+  alias NervesPhone.Video.Metadata
+
   # Wraps svtplay-dl's get_media. svtplay-dl reports problems by
   # logging them, and gives up with sys.exit, so the wrapper collects
   # what it logs as warnings and errors (from the calling thread only,
@@ -119,6 +121,7 @@ defmodule NervesPhone.SvtPlay do
           | {:all_episodes, boolean()}
           | {:resolution, String.t()}
           | {:force, boolean()}
+          | {:kind, NervesPhone.Video.Metadata.kind()}
 
   @doc false
   def start_link(opts \\ []) do
@@ -127,6 +130,10 @@ defmodule NervesPhone.SvtPlay do
 
   @doc """
   Downloads the programme at `url` and returns the files it made.
+
+  Each video gets its metadata and thumbnail next to it (see
+  `NervesPhone.Video.Metadata`), from SVT Play's API for an SVT Play
+  programme, and what's in the file otherwise.
 
   It's always H.264 video with stereo AAC sound, in MP4, which the phone
   plays. A programme without that fails rather than coming down in
@@ -147,10 +154,13 @@ defmodule NervesPhone.SvtPlay do
       limit, such as `"<=720"`. Defaults to the best there is.
     * `:force` - downloads the programme again even when its file is
       already there. Defaults to `false`.
+    * `:kind` - how the videos are sorted, such as `"education"` (see
+      `NervesPhone.Video.Metadata`). Defaults to unsorted.
   """
   @spec download(String.t(), [option()]) :: {:ok, [Path.t()]} | {:error, String.t()}
   def download(url, opts \\ []) when is_binary(url) do
     {output_dir, opts} = Keyword.pop(opts, :output_dir, default_output_dir())
+    {kind, opts} = Keyword.pop(opts, :kind)
 
     with {:ok, download} <- GenServer.call(__MODULE__, :python, :infinity),
          :ok <- File.mkdir_p(output_dir) do
@@ -178,9 +188,15 @@ defmodule NervesPhone.SvtPlay do
       written = for {path, _version} <- files(output_dir) -- before, do: path
 
       case {written, errors} do
-        {[], []} -> {:error, Enum.join(warnings, "\n") |> nonempty("Nothing was downloaded")}
-        {[], errors} -> {:error, Enum.join(errors, "\n")}
-        {new_files, _errors} -> {:ok, new_files}
+        {[], []} ->
+          {:error, Enum.join(warnings, "\n") |> nonempty("Nothing was downloaded")}
+
+        {[], errors} ->
+          {:error, Enum.join(errors, "\n")}
+
+        {new_files, _errors} ->
+          describe(url, new_files, %{"kind" => kind})
+          {:ok, new_files}
       end
     else
       {:error, reason} when is_atom(reason) ->
@@ -204,6 +220,70 @@ defmodule NervesPhone.SvtPlay do
         NervesPhone.Downloads.progress(id, pos / total)
         report_progress(id)
     end
+  end
+
+  # Writes each new video's metadata, with `extra` (such as its kind). One video from SVT Play is looked up
+  # there; several (all of a programme's episodes) or another site's get
+  # what's in the file.
+  defp describe(url, files, extra) do
+    videos = Enum.filter(files, &(String.downcase(Path.extname(&1)) in ~w(.mp4 .m4v .mov .mkv)))
+    host = URI.parse(url).host || ""
+    svtplay? = host == "svtplay.se" or String.ends_with?(host, ".svtplay.se")
+
+    case videos do
+      [video] when svtplay? ->
+        case svt_details(url, video) do
+          %{"item" => _} = page ->
+            Metadata.write(video, Map.merge(Metadata.from_svt(page, url), extra))
+
+          _none ->
+            Metadata.write(video, Map.merge(%{"url" => url, "source" => "svtplay"}, extra))
+        end
+
+      videos ->
+        for video <- videos,
+            do: Metadata.write(video, Map.merge(%{"url" => url, "source" => source(host)}, extra))
+    end
+  end
+
+  defp source(host), do: host |> String.replace_prefix("www.", "") |> String.split(".") |> hd()
+
+  # SVT Play's details page for the programme, saving its image as the
+  # video's thumbnail on the way. Nil if it can't be had.
+  defp svt_details(url, video) do
+    {result, _globals} =
+      Pythonx.eval(
+        """
+        import sys
+
+        path = dir.decode()
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+        import nerves_phone_svt as svt
+
+        page = svt.details(url.decode())
+        image = page and svt.image_url((page.get("item") or {}).get("image"))
+        if image:
+            try:
+                svt.fetch(image, thumbnail.decode())
+            except Exception:
+                pass
+
+        page
+        """,
+        %{
+          "dir" => Application.app_dir(:nerves_phone, "priv/svt"),
+          "url" => url,
+          "thumbnail" => Metadata.thumbnail_path(video)
+        }
+      )
+
+    result && Pythonx.decode(result)
+  rescue
+    error in Pythonx.Error ->
+      Logger.warning("Looking up #{url} on SVT Play failed: #{Exception.message(error)}")
+      nil
   end
 
   # Always H.264 with stereo AAC, which the phone plays

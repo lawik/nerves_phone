@@ -37,7 +37,16 @@ defmodule NervesPhone.UI do
         width: 432,
         height: 864,
         otp_app: :nerves_phone,
-        assets: [fonts: fonts()]
+        assets: [
+          fonts: fonts(),
+          # Video thumbnails, next to the videos, and the pictures on
+          # flash cards.
+          runtime_paths: [
+            enabled: true,
+            allowlist:
+              NervesPhone.Video.Library.roots() ++ [NervesPhone.Flashcards.Library.cache_dir()]
+          ]
+        ]
       ]
       |> Keyword.merge(Application.get_env(:nerves_phone, :viewport, []))
 
@@ -89,9 +98,97 @@ defmodule NervesPhone.UI do
   defp fullscreen(app, device) do
     el(
       [width(fill()), height(fill()), Font.family(font()), Background.color(color_rgb(0, 0, 0))] ++
-        if(device.screen_on, do: [], else: [Nearby.in_front(touch_catcher(device))]),
+        overlays(device),
       app.render()
     )
+  end
+
+  # Over everything: the volume for a moment after it changes, and while
+  # the screen is off, the touch catcher.
+  defp overlays(device) do
+    if(device.volume_overlay, do: [Nearby.in_front(volume_overlay(device))], else: []) ++
+      if(device.screen_on, do: [], else: [Nearby.in_front(touch_catcher(device))])
+  end
+
+  # The volume, as a small window near the top of the screen: an accent
+  # title strip, and a sunken well of one block a step, lit up to the
+  # volume.
+  defp volume_overlay(device) do
+    %{volume: volume, volume_steps: steps} = device
+
+    blocks =
+      for i <- 1..steps do
+        el(
+          [
+            width(fill()),
+            height(fill()),
+            Border.rounded(s(1)),
+            Background.color(
+              if i <= volume,
+                do: gradient([c(:acc_to), c(:acc_from)], 90),
+                else: c(:text, 0.06)
+            )
+          ],
+          none()
+        )
+      end
+
+    window =
+      column(
+        [
+          width(px(s(260))),
+          Border.rounded(s(3)),
+          Border.width(1),
+          Border.color(c(:text, 0.18)),
+          Background.color(vgrad(:s1, :s3)),
+          Border.shadow(offset: {0, s(3)}, blur: s(10), color: c(:text, 0.3))
+        ],
+        [
+          row(
+            [
+              width(fill()),
+              height(px(s(28))),
+              padding_xy(s(8), 0),
+              spacing(s(6)),
+              Border.rounded_each(s(2), s(2), 0, 0),
+              Background.color(accent())
+            ],
+            [
+              el([center_y()], icon(volume_icon(volume, steps), 15, c(:white))),
+              el(
+                [
+                  center_y(),
+                  width(fill()),
+                  Font.size(s(12)),
+                  Font.semi_bold(),
+                  Font.color(c(:white))
+                ],
+                text("Volume")
+              ),
+              el(
+                [center_y(), Font.size(s(12)), Font.color(c(:white, 0.85))],
+                text("#{volume}/#{steps}")
+              )
+            ]
+          ),
+          el(
+            [width(fill()), padding(s(10))],
+            row(
+              [
+                width(fill()),
+                height(px(s(18))),
+                padding(s(3)),
+                spacing(s(2)),
+                Border.rounded(s(2)),
+                Background.color(vgrad(:s2, :s3))
+              ] ++ sunken(),
+              blocks
+            )
+          )
+        ]
+      )
+
+    el([center_x(), align_top(), padding_xy(0, s(64))], window)
   end
 
   defp framed(app, shell, device, downloads) do
@@ -133,7 +230,7 @@ defmodule NervesPhone.UI do
         Font.family(font()),
         Font.color(c(:text)),
         Background.color(c(:s4))
-      ] ++ if(device.screen_on, do: [], else: [Nearby.in_front(touch_catcher(device))]),
+      ] ++ overlays(device),
       body
     )
   end
@@ -151,10 +248,10 @@ defmodule NervesPhone.UI do
 
   # ---------- Home ----------
 
-  # Four tiles a row.
+  # Four tiles a row, of the apps the schedule allows now.
   defp home_screen(shell) do
     tiles =
-      for app <- App.all() do
+      for app <- App.all(), app in shell.available do
         Input.button(
           [
             key(app),
@@ -240,16 +337,16 @@ defmodule NervesPhone.UI do
   end
 
   # Set with the volume buttons.
-  defp volume_indicator(%{volume: volume, volume_steps: steps}) do
-    icon_name =
-      cond do
-        volume == 0 -> :volume_0
-        volume <= div(steps, 3) -> :volume_1
-        volume <= div(2 * steps, 3) -> :volume_2
-        true -> :volume_3
-      end
+  defp volume_indicator(%{volume: volume, volume_steps: steps}),
+    do: el([center_y()], icon(volume_icon(volume, steps), 18, c(:white)))
 
-    el([center_y()], icon(icon_name, 18, c(:white)))
+  defp volume_icon(volume, steps) do
+    cond do
+      volume == 0 -> :volume_0
+      volume <= div(steps, 3) -> :volume_1
+      volume <= div(2 * steps, 3) -> :volume_2
+      true -> :volume_3
+    end
   end
 
   defp network_indicator(network) do

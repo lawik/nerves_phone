@@ -30,6 +30,10 @@ config :nerves_phone, :device_status, %{battery: %{level: 76, charging: false}}
 # Videos looks for files here on the host (/data on the phone).
 config :nerves_phone, :videos, roots: [Path.expand("../tmp/videos", __DIR__)]
 
+# Flash Cards looks for decks here on the host (/data/flashcards on the
+# phone).
+config :nerves_phone, :flashcards, roots: [Path.expand("../tmp/flashcards", __DIR__)]
+
 # The window never dims or goes dark unless that's set in Settings.
 config :nerves_phone, :display, dim_after_ms: nil, off_after_ms: nil
 
@@ -39,5 +43,10 @@ if config_env() == :test do
   config :nerves_phone, start_ui: false
   config :nerves_phone, state_dir: Path.expand("../tmp/test", __DIR__)
   config :nerves_phone, :videos, roots: [Path.expand("../tmp/test/videos", __DIR__)]
+
+  config :nerves_phone, :flashcards,
+    roots: [Path.expand("../tmp/test/decks", __DIR__)],
+    sound: nil
+
   config :emerge, compiled_backends: []
 end

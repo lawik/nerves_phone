@@ -82,6 +82,9 @@ defmodule NervesPhone.MixProject do
       {:emerge, "~> 0.4.2"},
       {:solve, "~> 0.3.1"},
 
+      # Time zones, for the apps' schedule (NervesPhone.Schedule).
+      {:tz, "~> 0.28.4"},
+
       # Media pipelines (audio now, video later), played through PortAudio.
       {:membrane_core, "~> 1.2"},
       {:membrane_raw_audio_format, "~> 0.12.0"},
@@ -99,6 +102,10 @@ defmodule NervesPhone.MixProject do
 
       # Embedded Python, for svtplay-dl and yt-dlp (see NervesPhone.Python).
       {:pythonx, "~> 0.4.10"},
+
+      # Reads Anki decks (.apkg), which are SQLite inside (see
+      # NervesPhone.Flashcards.Apkg).
+      {:exqlite, "~> 0.41.0"},
 
       # Runs tailscaled (see NervesPhone.Tailscale).
       {:muontrap, "~> 1.8"},

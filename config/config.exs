@@ -19,7 +19,15 @@ config :nerves, :firmware, rootfs_overlay: "rootfs_overlay"
 config :nerves, source_date_epoch: "1791054690"
 
 # The apps on the home screen, in order. Each is a NervesPhone.App.
-config :nerves_phone, apps: [NervesPhone.Apps.Videos, NervesPhone.Apps.Settings]
+config :nerves_phone,
+  apps: [
+    NervesPhone.Apps.Videos,
+    NervesPhone.Apps.Flashcards,
+    NervesPhone.Apps.Settings
+  ]
+
+# The apps' schedule is in local time (NervesPhone.Schedule).
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 
 if Mix.target() == :host do
   import_config "host.exs"

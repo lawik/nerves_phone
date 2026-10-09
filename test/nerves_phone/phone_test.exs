@@ -31,6 +31,30 @@ defmodule NervesPhone.PhoneTest do
     wait_for(fn -> Solve.subscribe(@app, :shell).active == nil end)
   end
 
+  test "the schedule hides apps, and closes the one open when its time's up" do
+    Solve.dispatch(@app, :shell, :open, Settings)
+    wait_for(fn -> Solve.subscribe(@app, :shell).active == Settings end)
+
+    # Settings, never; Videos and Flash Cards, always (they aren't
+    # scheduled).
+    closed = %{"timezone" => "Etc/UTC", "apps" => %{"NervesPhone.Apps.Settings" => []}}
+    Solve.dispatch(@app, :schedule, :changed, closed)
+
+    wait_for(fn ->
+      shell = Solve.subscribe(@app, :shell)
+
+      shell.active == nil and
+        shell.available == [NervesPhone.Apps.Videos, NervesPhone.Apps.Flashcards]
+    end)
+
+    Solve.dispatch(@app, :shell, :open, Settings)
+    Solve.dispatch(@app, :shell, :open, NervesPhone.Apps.Videos)
+    wait_for(fn -> Solve.subscribe(@app, :shell).active == NervesPhone.Apps.Videos end)
+
+    Solve.dispatch(@app, :schedule, :changed, NervesPhone.Schedule.empty())
+    wait_for(fn -> Settings in Solve.subscribe(@app, :shell).available end)
+  end
+
   test "Wi-Fi lists the networks around, one entry each, strongest first" do
     settings = Solve.subscribe(@app, :settings)
     assert settings.wifi.current.ssid == "Workshop"

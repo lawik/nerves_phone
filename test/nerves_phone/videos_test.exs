@@ -43,40 +43,90 @@ defmodule NervesPhone.VideosTest do
     end
   end
 
+  # Three shows sorted (two entertainment, one education), one video
+  # that isn't, and a raw H.264 file. Watch history starts empty.
   setup do
+    # The last test's controller may still be picking offers in a task.
+    :ok = Supervisor.terminate_child(NervesPhone.Supervisor, {NervesPhone.State, @app})
+    wait_for(fn -> Task.Supervisor.children(NervesPhone.TaskSupervisor) == [] end)
+
     root = hd(Application.fetch_env!(:nerves_phone, :videos)[:roots])
     File.rm_rf!(root)
-    File.mkdir_p!(Path.join(root, "holiday"))
-    File.mkdir_p!(Path.join(root, ".hidden"))
-    File.cp!("test/fixtures/tiny.mp4", Path.join(root, "holiday/beach.mp4"))
-    File.write!(Path.join(root, "holiday/Arrival.MOV"), "x")
-    File.write!(Path.join(root, "clip.h264"), "x")
-    File.write!(Path.join(root, "notes.txt"), "x")
-    File.write!(Path.join(root, ".hidden/secret.mp4"), "x")
+    File.rm_rf!(Path.join(NervesPhone.state_dir(), "kids"))
+
+    video(root, "paw/paw1.mp4", "Paw Patrol", "entertainment", "Pups save the day")
+    video(root, "paw/paw2.mp4", "Paw Patrol", "entertainment", "Pups save the town")
+    video(root, "bluey/bluey1.mp4", "Bluey", "entertainment", "Keepy Uppy")
+    video(root, "numbers/one.mp4", "Numberblocks", "education", "One")
+    File.cp!("test/fixtures/thumb.jpg", Path.join(root, "bluey/bluey1.jpg"))
+    File.cp!("test/fixtures/tiny.mp4", Path.join(root, "unsorted.mp4"))
+    File.mkdir_p!(Path.join(root, "clips"))
+    File.write!(Path.join(root, "clips/clip.h264"), "x")
 
     Application.put_env(:nerves_phone, :video_player, FakePlayer)
     on_exit(fn -> Application.delete_env(:nerves_phone, :video_player) end)
 
-    id = {NervesPhone.State, @app}
-    :ok = Supervisor.terminate_child(NervesPhone.Supervisor, id)
-    {:ok, _} = Supervisor.restart_child(NervesPhone.Supervisor, id)
+    :ok = Supervisor.terminate_child(NervesPhone.Supervisor, NervesPhone.Kids.History)
+    {:ok, _} = Supervisor.restart_child(NervesPhone.Supervisor, NervesPhone.Kids.History)
+    {:ok, _} = Supervisor.restart_child(NervesPhone.Supervisor, {NervesPhone.State, @app})
+
     {:ok, root: root}
   end
 
-  test "the library lists video files by folder, skipping hidden ones", %{root: root} do
-    wait_for(fn -> not videos().scanning end)
+  defp video(root, name, series, kind, title) do
+    path = Path.join(root, name)
+    File.mkdir_p!(Path.dirname(path))
+    File.cp!("test/fixtures/tiny.mp4", path)
 
-    assert [{^root, [%{name: "clip.h264"}]}, {"holiday", holiday}] = videos().folders
-    assert Enum.map(holiday, & &1.name) == ["Arrival.MOV", "beach.mp4"]
+    meta = %{
+      "title" => title,
+      "series" => series,
+      "kind" => kind,
+      "duration" => 2,
+      "thumbnail" => if(series == "Bluey", do: Path.basename(path, ".mp4") <> ".jpg")
+    }
+
+    File.write!(NervesPhone.Video.Metadata.path(path), JSON.encode!(meta))
   end
 
-  test "playing, pausing and stopping", %{root: root} do
-    wait_for(fn -> not videos().scanning end)
-    path = Path.join(root, "holiday/beach.mp4")
+  test "offers one sorted video from each show", %{root: root} do
+    wait_for(fn -> not videos().loading end)
 
-    Solve.dispatch(@app, :videos, :play, path)
+    offers = videos().offers
+    assert length(offers) == 3
+
+    assert offers |> Enum.map(& &1.series) |> Enum.sort() == [
+             "Bluey",
+             "Numberblocks",
+             "Paw Patrol"
+           ]
+
+    refute Enum.any?(offers, &(&1.path == Path.join(root, "unsorted.mp4")))
+
+    # Only offered videos play.
+    Solve.dispatch(@app, :videos, :play, Path.join(root, "unsorted.mp4"))
+    Process.sleep(100)
+    assert videos().playback == nil
+  end
+
+  test "the offers stay the same until something's been watched" do
+    wait_for(fn -> not videos().loading end)
+    offers = videos().offers
+
+    for _ <- 1..5 do
+      Solve.dispatch(@app, :videos, :opened, nil)
+      wait_for(fn -> not videos().loading end)
+      assert videos().offers == offers
+    end
+  end
+
+  test "playing, pausing and stopping" do
+    wait_for(fn -> not videos().loading end)
+    [offer | _] = videos().offers
+
+    Solve.dispatch(@app, :videos, :play, offer.path)
     wait_for(fn -> match?(%{page: :player, playback: %{status: :playing}}, videos()) end)
-    assert videos().playback.name == "beach.mp4"
+    assert videos().playback.name == offer.title
 
     Solve.dispatch(@app, :videos, :toggle_pause, nil)
     wait_for(fn -> videos().playback.status == :paused end)
@@ -84,40 +134,73 @@ defmodule NervesPhone.VideosTest do
     wait_for(fn -> videos().playback.status == :playing end)
 
     Solve.dispatch(@app, :videos, :stop, nil)
-    wait_for(fn -> videos().page == :library and videos().playback == nil end)
+    wait_for(fn -> videos().page == :offers and videos().playback == nil end)
   end
 
-  test "each video plays into a target of its own", %{root: root} do
-    wait_for(fn -> not videos().scanning end)
+  test "each video plays into a target of its own" do
+    wait_for(fn -> not videos().loading end)
+    [first, second | _] = videos().offers
 
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "holiday/beach.mp4"))
+    Solve.dispatch(@app, :videos, :play, first.path)
     wait_for(fn -> videos().playback != nil end)
-    first = videos().playback.target
+    target = videos().playback.target
 
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "clip.h264"))
-    wait_for(fn -> videos().playback.name == "clip.h264" end)
-    assert videos().playback.target != first
+    Solve.dispatch(@app, :videos, :play, second.path)
+    wait_for(fn -> videos().playback.name == second.title end)
+    assert videos().playback.target != target
   end
 
-  test "the player's end and errors show on the player page", %{root: root} do
-    wait_for(fn -> not videos().scanning end)
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "clip.h264"))
-    wait_for(fn -> videos().playback != nil end)
+  test "the time played goes in the history; a watch picks new offers", %{root: root} do
+    wait_for(fn -> not videos().loading end)
+    paw = Enum.find(videos().offers, &(&1.series == "Paw Patrol"))
 
+    Solve.dispatch(@app, :videos, :play, paw.path)
+    wait_for(fn -> match?(%{status: :playing}, videos().playback) end)
     {pipeline, _opts} = FakePlayer.last()
-    send(Solve.controller_pid(@app, :videos), {:video, pipeline, {:position, 61_000}})
-    send(Solve.controller_pid(@app, :videos), {:video, pipeline, :ended})
-    wait_for(fn -> match?(%{status: :ended, position_ms: 61_000}, videos().playback) end)
+    controller = Solve.controller_pid(@app, :videos)
+
+    # 70 s of play in 250 ms steps, with a jump (a seek) that doesn't count.
+    positions = Enum.to_list(0..40_000//250) ++ Enum.to_list(500_000..530_000//250)
+    for ms <- positions, do: send(controller, {:video, pipeline, {:position, ms}})
 
     # A pipeline that isn't the current one is ignored.
-    send(Solve.controller_pid(@app, :videos), {:video, self(), {:position, 5}})
-    Process.sleep(100)
-    assert videos().playback.position_ms == 61_000
+    send(controller, {:video, self(), {:position, 5}})
+    wait_for(fn -> videos().playback.position_ms == 530_000 end)
+
+    send(controller, {:video, pipeline, :ended})
+    wait_for(fn -> videos().page == :offers and not videos().loading end)
+
+    assert [%{path: path, series: "Paw Patrol", kind: "entertainment", watched_s: 70}] =
+             NervesPhone.Kids.History.all()
+
+    assert path == paw.path
+    refute Enum.any?(videos().offers, &(&1.series == "Paw Patrol"))
+    assert length(videos().offers) == 2
+    assert File.exists?(Path.join(root, "paw/paw1.mp4"))
   end
 
-  test "an MP4 is indexed, and seeking plays from the new time", %{root: root} do
-    wait_for(fn -> not videos().scanning end)
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "holiday/beach.mp4"))
+  test "after enough entertainment, only education is offered" do
+    {:ok, _} = NervesPhone.Kids.Rules.put(entertainment_limit_min: 1)
+    wait_for(fn -> not videos().loading end)
+    bluey = Enum.find(videos().offers, &(&1.series == "Bluey"))
+
+    Solve.dispatch(@app, :videos, :play, bluey.path)
+    wait_for(fn -> match?(%{status: :playing}, videos().playback) end)
+    {pipeline, _opts} = FakePlayer.last()
+    controller = Solve.controller_pid(@app, :videos)
+    for ms <- 0..61_000//250, do: send(controller, {:video, pipeline, {:position, ms}})
+    wait_for(fn -> videos().playback.position_ms == 61_000 end)
+
+    Solve.dispatch(@app, :videos, :stop, nil)
+    wait_for(fn -> videos().page == :offers and not videos().loading end)
+    assert videos().only == "education"
+    assert [%{series: "Numberblocks"}] = videos().offers
+  end
+
+  test "an MP4 is indexed, and seeking plays from the new time" do
+    wait_for(fn -> not videos().loading end)
+    paw = Enum.find(videos().offers, &(&1.series == "Paw Patrol"))
+    Solve.dispatch(@app, :videos, :play, paw.path)
     wait_for(fn -> match?(%{status: :playing, duration_ms: 2_000}, videos().playback) end)
     {first, opts} = FakePlayer.last()
     assert opts[:start_ms] == 0 and opts[:index].video.count == 60
@@ -130,6 +213,45 @@ defmodule NervesPhone.VideosTest do
     wait_for(fn -> elem(FakePlayer.last(), 0) != first end)
     assert {_pipeline, [index: _, start_ms: 1_200]} = FakePlayer.last()
     wait_for(fn -> videos().playback.status == :playing end)
+  end
+
+  test "renders the offers and the player" do
+    viewport =
+      start_supervised!(
+        {NervesPhone.UI,
+         backend: :headless, rendering_api: :raster, headless: [mode: :binary, target: self()]}
+      )
+
+    assert_receive {:emerge_skia_frame, _frame}, 5_000
+    snapshot(viewport, "videos-0-home")
+
+    Solve.dispatch(@app, :shell, :open, Videos)
+    wait_for(fn -> not videos().loading end)
+    snapshot(viewport, "videos-1-offers")
+
+    [offer | _] = videos().offers
+    Solve.dispatch(@app, :videos, :play, offer.path)
+    wait_for(fn -> videos().page == :player end)
+    snapshot(viewport, "videos-2-player")
+
+    Solve.dispatch(@app, :device, :volume_changed, 12)
+    snapshot(viewport, "videos-2-player-volume")
+
+    Solve.dispatch(@app, :videos, :stop, nil)
+    wait_for(fn -> videos().page == :offers end)
+
+    # Only education, as after too much entertainment.
+    history = NervesPhone.Kids.History
+
+    for _ <- 1..2 do
+      entry = history.start(%{path: offer.path, series: "Bluey", kind: "entertainment"})
+      history.watched(entry.id, 31 * 60)
+    end
+
+    {:ok, _} = NervesPhone.Kids.Rules.reset()
+    Solve.dispatch(@app, :videos, :opened, nil)
+    wait_for(fn -> videos().only == "education" end)
+    snapshot(viewport, "videos-3-learning")
   end
 
   describe "MP4 index and source" do
@@ -180,32 +302,6 @@ defmodule NervesPhone.VideosTest do
       assert_end_of_stream(pipeline, :video)
       assert_end_of_stream(pipeline, :audio)
     end
-  end
-
-  test "renders the library and the player", %{root: root} do
-    viewport =
-      start_supervised!(
-        {NervesPhone.UI,
-         backend: :headless, rendering_api: :raster, headless: [mode: :binary, target: self()]}
-      )
-
-    assert_receive {:emerge_skia_frame, _frame}, 5_000
-    snapshot(viewport, "videos-0-home")
-
-    Solve.dispatch(@app, :shell, :open, Videos)
-    wait_for(fn -> not videos().scanning end)
-    snapshot(viewport, "videos-1-library")
-
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "holiday/beach.mp4"))
-    wait_for(fn -> videos().page == :player end)
-    snapshot(viewport, "videos-2-player")
-
-    # The real player can't stop the fake one's process, so the new video
-    # starts when the handover gives up waiting (3 s).
-    Application.delete_env(:nerves_phone, :video_player)
-    Solve.dispatch(@app, :videos, :play, Path.join(root, "clip.h264"))
-    wait_for(fn -> match?(%{status: {:error, _}}, videos().playback) end, 5_000)
-    snapshot(viewport, "videos-3-error")
   end
 
   describe "Pacer" do

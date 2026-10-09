@@ -1,12 +1,16 @@
 defmodule NervesPhone.Apps.Videos do
   @moduledoc """
-  Videos: plays the video files found in folders under `/data`.
+  Videos, for children: a few things to watch, picked by the rules in
+  `NervesPhone.Kids` from the videos sorted into education and
+  entertainment with phone_remote.
 
-    * **Library** - every MP4, QuickTime or raw H.264 file, grouped by
-      folder. Tap one to play it; Rescan looks again.
+    * **Offers** - a card for each, with its picture, title and kind. Tap
+      one to play it. While the education offering shows, a strip at the
+      top says so.
     * **Playing** - the picture on the whole screen, with back, play/pause,
       stop and the time on top; they hide while it plays, and a tap shows
-      them. The screen stays on while it plays.
+      them. The screen stays on while it plays. When it ends, it's back to
+      the offers, with a new video in its place if it was watched through.
 
   The playback itself is `NervesPhone.Video.Player`: hardware decoding,
   frames to the screen without copies, and the sound to the speaker.
@@ -36,6 +40,10 @@ defmodule NervesPhone.Apps.Videos do
   @impl NervesPhone.App
   def opened, do: Solve.dispatch(@app, :videos, :opened, nil)
 
+  # The schedule closed it: nothing plays on behind the home screen.
+  @impl NervesPhone.App
+  def closed, do: Solve.dispatch(@app, :videos, :stop, nil)
+
   @impl NervesPhone.App
   def fullscreen? do
     videos = solve(@app, :videos)
@@ -43,46 +51,16 @@ defmodule NervesPhone.Apps.Videos do
   end
 
   @impl NervesPhone.App
-  def toolbar do
-    videos = solve(@app, :videos)
-
-    library = {:list, "Library", event(videos, :show, :library), videos.page == :library}
-
-    case {videos.page, videos.playback} do
-      {:player, %{status: status}} ->
-        [
-          library,
-          :separator,
-          if(status == :playing,
-            do: {:pause, "Pause", event(videos, :toggle_pause, nil), false},
-            else: {:play, "Play", event(videos, :toggle_pause, nil), false}
-          ),
-          {:stop, "Stop", event(videos, :stop, nil), false}
-        ]
-
-      {:library, playback} ->
-        [library] ++
-          if(playback,
-            do: [{:film, "Playing", event(videos, :show, :player), false}],
-            else: []
-          ) ++ [:separator, {:refresh, "Rescan", event(videos, :rescan, nil), videos.scanning}]
-
-      _ ->
-        [library]
-    end
-  end
+  def toolbar, do: []
 
   @impl NervesPhone.App
   def status do
     videos = solve(@app, :videos)
 
     case {videos.page, videos.playback} do
-      {:player, %{} = p} ->
-        "#{p.name} · #{describe(p.status)} #{clock(p.position_ms)}"
-
-      _ ->
-        count = videos.folders |> Enum.map(fn {_, files} -> length(files) end) |> Enum.sum()
-        if videos.scanning, do: "Looking for videos…", else: "#{count} videos"
+      {:player, %{} = p} -> "#{p.name} · #{describe(p.status)} #{clock(p.position_ms)}"
+      _ when videos.showing == "education" -> "Learning time"
+      _ -> "Pick something to watch"
     end
   end
 
@@ -98,49 +76,139 @@ defmodule NervesPhone.Apps.Videos do
 
     case {videos.page, videos.playback} do
       {:player, %{} = playback} -> player(videos, playback)
-      _ -> library(videos)
+      _ -> offers(videos)
     end
   end
 
-  # ---------- Library ----------
+  # ---------- Offers ----------
 
-  defp library(%{folders: [], scanning: true}), do: message(["Looking for videos…"])
+  defp offers(%{offers: [], loading: true}), do: message(["Finding something to watch…"])
 
-  defp library(%{folders: []}) do
-    message([
-      "No videos found.",
-      "Put MP4 or H.264 files in a folder under /data, then tap Rescan."
+  defp offers(%{offers: []}) do
+    message(["Nothing to watch right now.", "Ask a grown-up to add some videos."])
+  end
+
+  # The cards one above the other, or side by side when the phone's held
+  # sideways.
+  defp offers(videos) do
+    sideways? = solve(@app, :device).orientation.orientation != :portrait
+    cards = for video <- videos.offers, do: card(videos, video, sideways?)
+    layout = if sideways?, do: &row/2, else: &column/2
+
+    column([width(fill()), height(fill())], [
+      if(videos.showing == "education", do: learning_strip(), else: none()),
+      layout.([width(fill()), height(fill()), padding(s(12)), spacing(s(12))], cards)
     ])
   end
 
-  defp library(videos) do
-    playing = videos.playback && videos.playback.path
-
-    scroll_list(
-      Enum.flat_map(videos.folders, fn {folder, files} ->
-        [
-          section(folder)
-          | for file <- files do
-              list_row(
-                {:video, file.path},
-                event(videos, :play, file.path),
-                file.name,
-                kind(file.name),
-                NervesPhone.DeviceInfo.size(file.size),
-                file.path == playing
-              )
-            end
-        ]
-      end)
+  defp learning_strip do
+    row(
+      [
+        width(fill()),
+        padding_xy(s(12), s(8)),
+        spacing(s(8)),
+        Background.color(vgrad(:dock_from, :dock_to)),
+        Border.width_each(0, 0, 1, 0),
+        Border.color(c(:acc_from, 0.15))
+      ],
+      [
+        el([center_y()], icon(:book, 16, c(:acc_from))),
+        el(
+          [center_y(), Font.size(s(13)), Font.medium(), Font.color(c(:acc_from))],
+          text("Learning time")
+        )
+      ]
     )
   end
 
-  defp kind(name) do
-    case name |> Path.extname() |> String.downcase() do
-      ext when ext in ~w(.h264 .264) -> "H.264, no sound"
-      ".mov" -> "QuickTime"
-      _ -> "MP4"
-    end
+  # A raised panel: the video's picture filling it, and its title and kind
+  # in a strip below.
+  defp card(videos, video, sideways?) do
+    education? = video.kind == "education"
+
+    picture =
+      if video.thumbnail do
+        image(
+          [
+            width(fill()),
+            height(fill()),
+            image_fit(:cover),
+            Border.rounded_each(s(2), s(2), 0, 0)
+          ],
+          {:path, video.thumbnail}
+        )
+      else
+        el(
+          [
+            width(fill()),
+            height(fill()),
+            Border.rounded_each(s(2), s(2), 0, 0),
+            Background.color(gradient([color_rgb(232, 92, 72), color_rgb(176, 40, 64)], 45))
+          ],
+          el([center_x(), center_y()], icon(:film, 48, c(:white, 0.85)))
+        )
+      end
+
+    caption =
+      row(
+        [
+          width(fill()),
+          padding_xy(s(10), s(8)),
+          spacing(s(8)),
+          Background.color(vgrad(:s1, :s3)),
+          Border.rounded_each(0, 0, s(2), s(2)),
+          Border.width_each(1, 0, 0, 0),
+          Border.color(c(:text, 0.08))
+        ],
+        [
+          el(
+            [
+              center_y(),
+              width(px(s(28))),
+              height(px(s(28))),
+              Border.rounded(s(2)),
+              Background.color(
+                if education?,
+                  do: accent(),
+                  else: gradient([color_rgb(240, 160, 48), color_rgb(208, 96, 32)], 45)
+              )
+            ] ++ raised(),
+            el(
+              [center_x(), center_y()],
+              icon(if(education?, do: :book, else: :star), 16, c(:white))
+            )
+          ),
+          paragraph(
+            [width(fill()), center_y(), Font.size(s(14)), Font.medium(), Font.color(c(:text))],
+            [text(video.title)]
+          ),
+          if(video.duration_s,
+            do:
+              el(
+                [center_y(), Font.size(s(12)), Font.light(), Font.color(c(:dim))],
+                text(clock(round(video.duration_s * 1000)))
+              ),
+            else: none()
+          )
+        ]
+      )
+
+    Input.button(
+      [
+        key({:offer, video.path}),
+        # Filling the screen between them, but not much bigger than a
+        # third of it when fewer are on offer.
+        if(sideways?, do: width(min(px(s(320)), fill())), else: width(fill())),
+        if(sideways?, do: height(fill()), else: height(min(px(s(260)), fill()))),
+        Border.rounded(s(3)),
+        Border.width(1),
+        Border.color(c(:text, 0.15)),
+        Background.color(c(:s4)),
+        Event.on_press(event(videos, :play, video.path)),
+        Interactive.mouse_down(pressed())
+      ] ++ raised(),
+      column([width(fill()), height(fill())], [picture, caption])
+    )
   end
 
   # ---------- Playing ----------

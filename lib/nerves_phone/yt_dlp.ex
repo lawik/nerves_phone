@@ -58,6 +58,12 @@ defmodule NervesPhone.YtDlp do
   @typedoc "What to fetch: `as: :video | :audio`, and `max_height: lines` for video."
   @type format_option :: {:as, :video | :audio} | {:max_height, pos_integer()}
 
+  @typedoc """
+  For `download/3`: a format option, or `kind:`, how the video is sorted
+  (see `NervesPhone.Video.Metadata`).
+  """
+  @type download_option :: format_option() | {:kind, NervesPhone.Video.Metadata.kind()}
+
   @entry_keys ~w(id title url duration channel thumbnail is_live live_status)a
   @format_keys ~w(format_id ext protocol acodec vcodec abr height filesize)a
 
@@ -101,16 +107,19 @@ defmodule NervesPhone.YtDlp do
       `"cancelled"` after `cancel/1`
 
   Video comes as `.mp4`, audio as `.m4a`; see "Formats" for the
-  options. The download is cancelled if the calling process exits.
+  options. Its thumbnail and everything yt-dlp knows about it go next to
+  it (see `NervesPhone.Video.Metadata`), sorted as `:kind` if that's
+  given. The download is cancelled if the calling process exits.
   """
-  @spec download(String.t(), Path.t(), [format_option()]) ::
+  @spec download(String.t(), Path.t(), [download_option()]) ::
           {:ok, reference()} | {:error, String.t()}
   def download(url, dir, opts \\ []) do
+    {kind, opts} = Keyword.pop(opts, :kind)
     format = format(opts)
     ref = make_ref()
     caller = self()
 
-    forwarder = spawn(fn -> forward(caller, ref, url) end)
+    forwarder = spawn(fn -> forward(caller, ref, url, kind) end)
 
     result =
       call(
@@ -155,13 +164,13 @@ defmodule NervesPhone.YtDlp do
   # Decodes the Python thread's events and passes them on to the caller.
   # The download is in NervesPhone.Downloads (for the title bar) for as
   # long as this runs.
-  defp forward(caller, ref, url) do
+  defp forward(caller, ref, url, kind) do
     monitor = Process.monitor(caller)
     download = NervesPhone.Downloads.add(url)
-    forward_loop(caller, ref, url, monitor, download)
+    forward_loop(caller, ref, url, kind, monitor, download)
   end
 
-  defp forward_loop(caller, ref, url, monitor, download) do
+  defp forward_loop(caller, ref, url, kind, monitor, download) do
     receive do
       {:yt_dlp, object} ->
         event =
@@ -169,7 +178,9 @@ defmodule NervesPhone.YtDlp do
             {"progress", downloaded, total} ->
               {:progress, downloaded, total}
 
-            {"done", path} ->
+            {"done", path, info} ->
+              meta = NervesPhone.Video.Metadata.from_yt_dlp(info)
+              NervesPhone.Video.Metadata.write(path, Map.put(meta, "kind", kind))
               {:done, path}
 
             {"error", message, nil} ->
@@ -186,7 +197,7 @@ defmodule NervesPhone.YtDlp do
           {:progress, downloaded, total} ->
             fraction = if is_number(total) and total > 0, do: downloaded / total
             NervesPhone.Downloads.progress(download, fraction)
-            forward_loop(caller, ref, url, monitor, download)
+            forward_loop(caller, ref, url, kind, monitor, download)
 
           _finished ->
             :ok

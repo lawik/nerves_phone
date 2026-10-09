@@ -123,11 +123,35 @@ def info(url):
     return _run({}, fun)
 
 
+# Stream URLs expire within hours, and the formats list is long, so
+# they're not worth keeping with a video.
+_UNKEPT = {
+    "formats",
+    "requested_formats",
+    "requested_downloads",
+    "requested_subtitles",
+    "automatic_captions",
+    "subtitles",
+    "heatmap",
+    "http_headers",
+    "url",
+    "manifest_url",
+    "fragments",
+}
+
+
+def _keepable(ydl, info):
+    """What yt-dlp knows about a video, as plain JSON-able values."""
+    info = ydl.sanitize_info(info)
+    return {key: value for key, value in info.items() if key not in _UNKEPT}
+
+
 def start_download(id, url, dir, format, send):
     """Starts a download in a thread and returns right away.
 
     `send(event)` is called from the thread with ("progress", downloaded,
-    total), then ("done", path) or ("error", message, traceback). The
+    total), then ("done", path, info) or ("error", message, traceback).
+    info is what yt-dlp knows about the video (see _keepable). The
     traceback is None for yt-dlp's own errors, such as an unavailable video.
     """
     cancel = threading.Event()
@@ -153,13 +177,19 @@ def start_download(id, url, dir, format, send):
         "paths": {"home": dir},
         "outtmpl": "%(title).150B [%(id)s].%(ext)s",
         "progress_hooks": [hook],
+        # The thumbnail next to the video, as JPEG (YouTube's are WebP),
+        # converted with ffmpeg.
+        "writethumbnail": True,
+        "postprocessors": [
+            {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"}
+        ],
     }
 
     def run():
         try:
             with yt_dlp.YoutubeDL(_opts(opts)) as ydl:
                 info = ydl.extract_info(url, download=True)
-            send(("done", info["requested_downloads"][0]["filepath"]))
+            send(("done", info["requested_downloads"][0]["filepath"], _keepable(ydl, info)))
         except Exception as error:
             # yt-dlp may wrap the hook's DownloadCancelled in another error.
             if cancel.is_set() or isinstance(error, DownloadCancelled):
