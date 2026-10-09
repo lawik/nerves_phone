@@ -14,9 +14,14 @@ defmodule NervesPhone.Application do
         # {NervesPhone.Worker, arg},
         {Task.Supervisor, name: NervesPhone.TaskSupervisor},
         NervesPhone.Audio.Volume,
+        NervesPhone.Kids.History,
+        NervesPhone.Flashcards.Progress,
+        NervesPhone.Flashcards.Sound,
         NervesPhone.Python,
         NervesPhone.Downloads,
-        NervesPhone.SvtPlay
+        NervesPhone.SvtPlay,
+        # What phone_remote has queued to download.
+        NervesPhone.DownloadQueue
       ] ++
         target_children() ++
         [

@@ -43,6 +43,8 @@ if config_env() == :test do
   config :nerves_phone, start_ui: false
   config :nerves_phone, state_dir: Path.expand("../tmp/test", __DIR__)
   config :nerves_phone, :videos, roots: [Path.expand("../tmp/test/videos", __DIR__)]
+  # Queued things wait rather than download.
+  config :nerves_phone, :download_queue, run: false
 
   config :nerves_phone, :flashcards,
     roots: [Path.expand("../tmp/test/decks", __DIR__)],

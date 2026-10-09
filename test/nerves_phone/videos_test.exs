@@ -82,26 +82,25 @@ defmodule NervesPhone.VideosTest do
       "title" => title,
       "series" => series,
       "kind" => kind,
-      "duration" => 2,
+      # Not the file's real length: long enough to stop partway.
+      "duration" => 120,
       "thumbnail" => if(series == "Bluey", do: Path.basename(path, ".mp4") <> ".jpg")
     }
 
     File.write!(NervesPhone.Video.Metadata.path(path), JSON.encode!(meta))
   end
 
-  test "offers one sorted video from each show", %{root: root} do
+  test "offers the entertainment offering: one a show first, sorted videos only", %{
+    root: root
+  } do
     wait_for(fn -> not videos().loading end)
 
     offers = videos().offers
+    assert videos().showing == "entertainment"
     assert length(offers) == 3
-
-    assert offers |> Enum.map(& &1.series) |> Enum.sort() == [
-             "Bluey",
-             "Numberblocks",
-             "Paw Patrol"
-           ]
-
-    refute Enum.any?(offers, &(&1.path == Path.join(root, "unsorted.mp4")))
+    assert Enum.all?(offers, &(&1.kind == "entertainment"))
+    # Two shows for three slots: one has two.
+    assert offers |> Enum.map(& &1.series) |> Enum.sort() == ["Bluey", "Paw Patrol", "Paw Patrol"]
 
     # Only offered videos play.
     Solve.dispatch(@app, :videos, :play, Path.join(root, "unsorted.mp4"))
@@ -150,51 +149,61 @@ defmodule NervesPhone.VideosTest do
     assert videos().playback.target != target
   end
 
-  test "the time played goes in the history; a watch picks new offers", %{root: root} do
-    wait_for(fn -> not videos().loading end)
-    paw = Enum.find(videos().offers, &(&1.series == "Paw Patrol"))
+  # Plays an offer, reporting positions as the player would, then stops it.
+  defp watch(offer, positions) do
+    Solve.dispatch(@app, :videos, :play, offer.path)
 
-    Solve.dispatch(@app, :videos, :play, paw.path)
-    wait_for(fn -> match?(%{status: :playing}, videos().playback) end)
+    wait_for(fn ->
+      match?(%{status: :playing, name: name} when name == offer.title, videos().playback)
+    end)
+
     {pipeline, _opts} = FakePlayer.last()
     controller = Solve.controller_pid(@app, :videos)
-
-    # 70 s of play in 250 ms steps, with a jump (a seek) that doesn't count.
-    positions = Enum.to_list(0..40_000//250) ++ Enum.to_list(500_000..530_000//250)
     for ms <- positions, do: send(controller, {:video, pipeline, {:position, ms}})
-
-    # A pipeline that isn't the current one is ignored.
-    send(controller, {:video, self(), {:position, 5}})
-    wait_for(fn -> videos().playback.position_ms == 530_000 end)
-
-    send(controller, {:video, pipeline, :ended})
-    wait_for(fn -> videos().page == :offers and not videos().loading end)
-
-    assert [%{path: path, series: "Paw Patrol", kind: "entertainment", watched_s: 70}] =
-             NervesPhone.Kids.History.all()
-
-    assert path == paw.path
-    refute Enum.any?(videos().offers, &(&1.series == "Paw Patrol"))
-    assert length(videos().offers) == 2
-    assert File.exists?(Path.join(root, "paw/paw1.mp4"))
-  end
-
-  test "after enough entertainment, only education is offered" do
-    {:ok, _} = NervesPhone.Kids.Rules.put(entertainment_limit_min: 1)
-    wait_for(fn -> not videos().loading end)
-    bluey = Enum.find(videos().offers, &(&1.series == "Bluey"))
-
-    Solve.dispatch(@app, :videos, :play, bluey.path)
-    wait_for(fn -> match?(%{status: :playing}, videos().playback) end)
-    {pipeline, _opts} = FakePlayer.last()
-    controller = Solve.controller_pid(@app, :videos)
-    for ms <- 0..61_000//250, do: send(controller, {:video, pipeline, {:position, ms}})
-    wait_for(fn -> videos().playback.position_ms == 61_000 end)
+    wait_for(fn -> videos().playback.position_ms == List.last(positions) end)
 
     Solve.dispatch(@app, :videos, :stop, nil)
     wait_for(fn -> videos().page == :offers and not videos().loading end)
-    assert videos().only == "education"
-    assert [%{series: "Numberblocks"}] = videos().offers
+  end
+
+  test "stopped partway, a video stays on offer; watched through, its slot gets a new one" do
+    wait_for(fn -> not videos().loading end)
+    offers = videos().offers
+    bluey = Enum.find(offers, &(&1.series == "Bluey"))
+
+    # 70 of 120 s, with a jump (a seek) that doesn't count.
+    watch(bluey, Enum.to_list(0..40_000//250) ++ Enum.to_list(80_000..110_000//250))
+
+    assert [%{path: path, series: "Bluey", kind: "entertainment", watched_s: 70}] =
+             NervesPhone.Kids.History.all()
+
+    assert path == bluey.path
+    assert videos().offers == offers
+
+    # A pipeline that isn't the current one is ignored.
+    send(Solve.controller_pid(@app, :videos), {:video, self(), {:position, 5}})
+
+    # 110 of 120 s: watched through. Its slot is refilled where it was, but
+    # with nothing that fits (the only other show is on offer already, and
+    # Bluey's just been watched) it stays empty.
+    watch(bluey, Enum.to_list(0..110_000//250))
+    at = Enum.find_index(offers, &(&1 == bluey))
+    assert videos().offers == List.delete_at(offers, at)
+  end
+
+  test "after enough entertainment, the education offering; then entertainment as it was" do
+    {:ok, _} = NervesPhone.Kids.Rules.put(entertainment_limit_min: 1, education_required_min: 1)
+    wait_for(fn -> not videos().loading end)
+    fun = videos().offers
+    [paw | _] = Enum.filter(fun, &(&1.series == "Paw Patrol"))
+
+    watch(paw, Enum.to_list(0..61_000//250))
+    assert videos().showing == "education"
+    assert [%{series: "Numberblocks"} = one] = videos().offers
+
+    watch(one, Enum.to_list(0..61_000//250))
+    assert videos().showing == "entertainment"
+    assert videos().offers == fun
   end
 
   test "an MP4 is indexed, and seeking plays from the new time" do
@@ -250,7 +259,7 @@ defmodule NervesPhone.VideosTest do
 
     {:ok, _} = NervesPhone.Kids.Rules.reset()
     Solve.dispatch(@app, :videos, :opened, nil)
-    wait_for(fn -> videos().only == "education" end)
+    wait_for(fn -> videos().showing == "education" end)
     snapshot(viewport, "videos-3-learning")
   end
 

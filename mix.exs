@@ -82,6 +82,9 @@ defmodule NervesPhone.MixProject do
       {:emerge, "~> 0.4.2"},
       {:solve, "~> 0.3.1"},
 
+      # SVT Play's API (NervesPhone.SvtPlay.Catalog).
+      {:req, "~> 0.5"},
+
       # Time zones, for the apps' schedule (NervesPhone.Schedule).
       {:tz, "~> 0.28.4"},
 

@@ -9,6 +9,8 @@ defmodule NervesPhone.State do
     * `:shell` - which app is on screen, and which can be opened
     * `:schedule` - which apps the schedule allows now
       (`NervesPhone.Schedule`)
+    * `:download_queue` - what's queued to download, for phone_remote
+      (`NervesPhone.DownloadQueue`)
     * `:device` - battery, network and screen status for the title bar
     * `:downloads` - the downloads in progress, for the title bar
     * and each app's own (see `NervesPhone.App`)
@@ -17,7 +19,7 @@ defmodule NervesPhone.State do
   use Solve
 
   alias NervesPhone.App
-  alias NervesPhone.State.{Device, Downloads, Schedule, Shell}
+  alias NervesPhone.State.{Device, DownloadQueue, Downloads, Schedule, Shell}
 
   @impl Solve
   def controllers do
@@ -25,7 +27,8 @@ defmodule NervesPhone.State do
       controller!(name: :schedule, module: Schedule),
       controller!(name: :shell, module: Shell, dependencies: [:schedule]),
       controller!(name: :device, module: Device),
-      controller!(name: :downloads, module: Downloads)
+      controller!(name: :downloads, module: Downloads),
+      controller!(name: :download_queue, module: DownloadQueue)
     ] ++ for(app <- App.all(), spec <- app.controllers(), do: controller!(spec))
   end
 end
