@@ -138,9 +138,13 @@ After that, update over the network with `mix upload`.
 * **Network.** Join Wi-Fi from Settings, or build with `FP3_WIFI_SSID` /
   `FP3_WIFI_PASSPHRASE` to join one on first boot. Cellular needs `FP3_APN`.
   Turning Wi-Fi off keeps its settings in `/data/phone/wlan0.config`.
-* **Sound.** `ex_audio` routes the FP3+ loudspeaker at boot
-  (`config :ex_audio` in `config/fp3.exs`). The original FP3's amplifier
-  needs different mixer controls.
+* **Sound.** `ex_audio` routes the loudspeaker and the bottom microphone
+  at boot (`config :ex_audio` in `config/fp3.exs`); the route is the same
+  for the FP3's AW8898 and the FP3+'s TAS2557 amplifier. Recording from
+  ALSA device `mic` (or `hw:0,1`) is mono from the bottom mic. The top
+  (noise-reference) mic is off by default; `NervesPhone.Audio.Mic` turns it
+  on as a second channel for code that processes the pair itself. Nothing
+  in the stack cancels noise or echo for recordings.
 * **Brightness.** The panel's backlight is `/sys/class/backlight/*`
   (0..4095 on the FP3). There's no ambient light sensor the kernel exposes,
   so automatic brightness takes two small frames from the front camera

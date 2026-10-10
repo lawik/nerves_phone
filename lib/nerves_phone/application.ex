@@ -14,6 +14,7 @@ defmodule NervesPhone.Application do
         # {NervesPhone.Worker, arg},
         {Task.Supervisor, name: NervesPhone.TaskSupervisor},
         NervesPhone.Audio.Volume,
+        NervesPhone.Audio.Mic,
         NervesPhone.Kids.History,
         NervesPhone.Flashcards.Progress,
         NervesPhone.Flashcards.Sound,
@@ -43,7 +44,12 @@ defmodule NervesPhone.Application do
   defp ui_children() do
     # Registered, so the video player can hand it frames.
     if Application.get_env(:nerves_phone, :start_ui, true),
-      do: [{NervesPhone.UI, name: NervesPhone.UI}],
+      do: [
+        {NervesPhone.UI, name: NervesPhone.UI},
+        # With the UI up, the kernel's console comes off the panel (see
+        # NervesPhone.Console). A no-op on the host.
+        {Task, &NervesPhone.Console.release_panel/0}
+      ],
       else: []
   end
 

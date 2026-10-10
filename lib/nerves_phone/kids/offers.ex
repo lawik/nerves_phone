@@ -22,9 +22,10 @@ defmodule NervesPhone.Kids.Offers do
       others stay. So does a slot whose video has gone, or been sorted into
       the other kind. A video watched only partly stays on offer.
     * **Something else first.** A new video isn't from a show among the
-      last `:show_cooldown` things watched, nor from a show already on
-      offer if there's any other choice. From a show, the episode watched the
-      fewest times comes first, at random between equals.
+      last `:show_cooldown` things watched. It's one watched through the
+      fewest times, so nothing comes back before everything else (that
+      fits) has been watched; between those, one from a show not already
+      on offer if there is one, else at random.
 
   Watched always means fully watched: stopping a video early doesn't
   replace it, rest its show or count as a play of it. The minutes it
@@ -210,8 +211,12 @@ defmodule NervesPhone.Kids.Offers do
         &(MapSet.member?(taken_paths, &1.path) or MapSet.member?(context.resting, &1.series))
       )
       |> context.shuffle.()
-      |> Enum.sort_by(&Map.get(context.plays, &1.path, 0))
 
-    Enum.find(choices, &(not MapSet.member?(taken_shows, &1.series))) || List.first(choices)
+    # Unwatched before watched again, then a show not on offer.
+    Enum.min_by(
+      choices,
+      &{Map.get(context.plays, &1.path, 0), MapSet.member?(taken_shows, &1.series)},
+      fn -> nil end
+    )
   end
 end

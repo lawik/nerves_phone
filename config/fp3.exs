@@ -23,11 +23,20 @@ config :emerge, compiled_backends: [drm: [:opengl]]
 # Rendered with OpenGL ES on the Adreno 506 (Mesa freedreno). The driver's
 # GMEM tiling path hangs on Skia's MSAA depth/stencil attachments, so
 # rel/vm.args.eex sets FD_MESA_DEBUG=sysmem to bypass it.
+#
+# The renderer cache is off: with it, Emerge 0.4.2's DRM presenter can
+# skip a scene that arrives while an older one is staged behind a page
+# flip (a tap's press style, then the screen it opens). It takes the new
+# scene's fingerprint when it submits the old one, then counts the new
+# one as already shown, so the screen stays stale until the next touch.
+# See can_skip_unchanged_visible_frame in emerge_skia's renderer.rs and
+# its use in backend/drm/gl.rs.
 config :nerves_phone, :viewport,
   backend: :drm,
   drm_card: "/dev/dri/card0",
   hw_cursor: false,
-  rendering_api: :opengl
+  rendering_api: :opengl,
+  renderer_cache: [enabled: false]
 
 # Scale the UI for the panel's ~430 dpi.
 config :nerves_phone, ui_scale: 2.5
@@ -198,14 +207,36 @@ config :mdns_lite,
     }
   ]
 
-# ALSA routing for the FP3+ loudspeaker (TAS2557 amp on QUIN MI2S).
-# The original FP3's amp needs different controls.
+# ALSA routing applied once the sound card is up (ex_audio).
+#
+# Loudspeaker: the FP3's AW8898 and the FP3+'s TAS2557 both sit on Quinary
+# MI2S, so one route serves both. Playback (hw:0,0, MultiMedia1) goes to
+# QUIN_MI2S_RX.
+#
+# Microphone: the phone's two mics are digital mics on the WCD9335 codec,
+# DMIC1 at the bottom (the one you speak into) and DMIC2 at the top (the
+# noise reference). Capture (hw:0,1, MultiMedia2) comes from SLIMBUS_0_TX,
+# fed by the codec's SLIM TX ports; this routes the bottom mic through
+# decimator 7 to TX7, so recording is mono by default. The top mic stays
+# off until NervesPhone.Audio.Mic.set_secondary(true) adds it on TX8 as a
+# second channel; see that module.
 config :ex_audio,
   card: 0,
   mixer: [
     {"QUIN_MI2S_RX Audio Mixer MultiMedia1", :on},
-    {"Speaker Switch", :on}
+    {"Speaker Switch", :on},
+    {"MultiMedia2 Mixer SLIMBUS_0_TX", :on},
+    {"SLIM TX7 MUX", "DEC7"},
+    {"ADC MUX7", "DMIC"},
+    {"DMIC MUX7", "DMIC1"},
+    {"AIF1_CAP Mixer SLIM TX7", :on}
   ]
+
+# NervesPhone.Audio.Mic switches the top mic with amixer. Two-channel
+# capture records silence on nerves_system_fp3 v0.2.4 and a channel
+# mismatch crashes the kernel, so switching the top mic on is refused until
+# `mic_secondary: :experimental` is set here; see the module doc.
+config :nerves_phone, mic_control: :alsa
 
 # Bluetooth LE through the kernel's hci0 (the WCN3680 behind btqcomsmd).
 # BlueHeron takes the controller over exclusively, so bluetoothd must not

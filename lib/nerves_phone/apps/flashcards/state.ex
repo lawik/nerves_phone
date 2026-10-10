@@ -7,31 +7,57 @@ defmodule NervesPhone.Apps.Flashcards.State do
   each has due and new today; not before, as reading new decks takes a
   moment.
 
-  Studying a deck deals the cards due now (or within the next 20
-  minutes, as Anki does), then new ones, up to a number of new cards a
-  day (`config :nerves_phone, :flashcards, new_per_day: 10`). A card shows
-  its front; Reveal shows the back, and an answer (`:again`, `:good` or
-  `:easy`) schedules it (`NervesPhone.Flashcards.Scheduler`), saves that
-  (`NervesPhone.Flashcards.Progress`) and moves on. A card that's still
-  being learnt comes round again in the same session: after a few cards
-  for Again, at the end for Good. Sounds on the side showing play by
-  themselves, and again with `:replay`.
+  Picking a deck (`:study`) marks it as `opening` at once, and nothing
+  else can be picked meanwhile; the cards are dealt in a task, and the
+  first one shows once that's done, and not sooner than `@opening_ms`
+  after the pick, so the choice is seen to be taken. Back (`:decks`)
+  cancels it.
+
+  Dealing takes the cards due now (or within the next 20 minutes, as Anki
+  does), then new ones, up to a number of new cards a day (`config
+  :nerves_phone, :flashcards, new_per_day: 10`). Each card is asked as a
+  multiple-choice question (`NervesPhone.Flashcards.Quiz`), and the pick
+  grades it: right is Good, wrong is Again, scheduled by
+  `NervesPhone.Flashcards.Scheduler` and saved in
+  `NervesPhone.Flashcards.Progress`. After a right pick the next card
+  comes by itself; after a wrong one, the right answer shows until
+  `:next`. A card that's still being learnt comes round again in the same
+  session: a few cards on if it was wrong, at the end if it was right.
+
+  A deck with nothing to study today is dealt whole, shuffled, as
+  practice: picks don't change when its cards come back, and a wrong card
+  still comes round again.
+
+  A round's score is how many cards were right the first time they came
+  up, and a perfect round of the whole deck is timed, from the first card
+  showing to the last pick; `NervesPhone.Flashcards.Results` keeps the
+  last score and the fastest time. Nothing is shown counting while
+  playing: the time is only there to beat, for those who want to.
+
+  The prompt's sounds play when a card shows, and again with `:replay`;
+  the answer's play when it's picked.
   """
 
   use Solve.Controller,
-    events: [:opened, :study, :reveal, :answer, :replay, :decks]
+    events: [:opened, :study, :pick, :next, :replay, :decks]
 
-  alias NervesPhone.Flashcards.{Library, Progress, Scheduler, Sound}
+  alias NervesPhone.Flashcards.{Library, Progress, Quiz, Results, Scheduler, Sound}
 
   # Cards due within this long are dealt now.
   @learn_ahead_s 20 * 60
 
-  # Again puts a card back this many cards on.
+  # A wrong card comes back this many cards on.
   @again_after 3
+
+  # A picked deck shows as opening at least this long.
+  @opening_ms 400
+
+  # A right answer shows this long before the next card.
+  @right_ms 1_200
 
   @impl Solve.Controller
   def init(_params, _dependencies) do
-    %{page: :decks, loading: true, decks: [], data: %{}, session: nil}
+    %{page: :decks, loading: true, decks: [], data: %{}, opening: nil, session: nil}
   end
 
   @impl Solve.Controller
@@ -40,11 +66,24 @@ defmodule NervesPhone.Apps.Flashcards.State do
       page: state.page,
       loading: state.loading,
       decks: state.decks,
+      opening: state.opening && state.opening.id,
       session:
         state.session &&
           state.session
-          |> Map.take([:deck, :name, :card, :revealed, :studied, :media_dir])
+          |> Map.take([
+            :deck,
+            :name,
+            :card,
+            :question,
+            :picked,
+            :studied,
+            :right,
+            :media_dir,
+            :practice,
+            :result
+          ])
           |> Map.put(:left, length(state.session.queue) + if(state.session.card, do: 1, else: 0))
+          |> Map.put(:marks, Enum.reverse(state.session.marks))
     }
   end
 
@@ -52,76 +91,91 @@ defmodule NervesPhone.Apps.Flashcards.State do
 
   def opened(_payload, state) do
     send(self(), :load)
-    %{state | page: :decks, loading: true}
+    %{state | page: :decks, loading: true, opening: nil}
   end
 
   def decks(_payload, state) do
     Sound.stop()
-    opened(nil, %{state | session: nil})
+    opened(nil, %{state | session: nil, page: :decks})
   end
 
-  def study(id, state) do
+  def study(id, %{page: :decks, opening: nil} = state) do
     case state.data do
       %{^id => deck} ->
-        now = DateTime.utc_now()
-        progress = Progress.all()
-        queue = deal(deck, progress, now, tz())
+        controller = self()
 
-        session = %{
-          deck: id,
-          name: deck.name,
-          media_dir: deck.media_dir,
-          progress: progress,
-          queue: queue,
-          card: nil,
-          revealed: false,
-          studied: 0
-        }
+        Task.Supervisor.start_child(NervesPhone.TaskSupervisor, fn ->
+          send(controller, {:dealt, id, deal(deck, Progress.all(), DateTime.utc_now(), tz())})
+        end)
 
-        next_card(%{state | session: session})
+        %{state | opening: %{id: id, at: System.monotonic_time(:millisecond)}}
 
       _unknown ->
         state
     end
   end
 
-  def reveal(_payload, %{session: %{card: %{}} = session} = state) do
-    session = %{session | revealed: true}
-    play(session)
-    %{state | session: session}
-  end
+  def study(_id, state), do: state
 
-  def reveal(_payload, state), do: state
+  def pick(index, %{session: %{card: %{}, picked: nil} = s} = state) when is_integer(index) do
+    %{card: card, question: question} = s
+    right? = index == question.correct
+    rating = if right?, do: :good, else: :again
 
-  def answer(rating, %{session: %{card: %{} = card, revealed: true} = s} = state)
-      when rating in [:again, :good, :easy] do
-    now = DateTime.utc_now()
-    card_state = Scheduler.answer(s.progress[card.key], rating, now, tz())
-    :ok = Progress.put(card.key, card_state)
-
-    queue =
-      if Scheduler.learning?(card_state) and
-           card_state["due"] <= DateTime.to_unix(now) + @learn_ahead_s do
-        at = if rating == :again, do: @again_after, else: length(s.queue)
-        List.insert_at(s.queue, at, card)
+    {progress, queue} =
+      if s.practice do
+        {s.progress, if(right?, do: s.queue, else: List.insert_at(s.queue, @again_after, card))}
       else
-        s.queue
+        now = DateTime.utc_now()
+        card_state = Scheduler.answer(s.progress[card.key], rating, now, tz())
+        :ok = Progress.put(card.key, card_state)
+
+        queue =
+          if Scheduler.learning?(card_state) and
+               card_state["due"] <= DateTime.to_unix(now) + @learn_ahead_s do
+            at = if right?, do: length(s.queue), else: @again_after
+            List.insert_at(s.queue, at, card)
+          else
+            s.queue
+          end
+
+        {Map.put(s.progress, card.key, card_state), queue}
       end
 
-    session = %{
-      s
-      | progress: Map.put(s.progress, card.key, card_state),
-        queue: queue,
-        studied: s.studied + 1
-    }
+    # Only the first time a card comes up counts for the score.
+    {marks, seen} =
+      if MapSet.member?(s.seen, card.key),
+        do: {s.marks, s.seen},
+        else: {[right? | s.marks], MapSet.put(s.seen, card.key)}
 
-    next_card(%{state | session: session})
+    play(question.answer_sounds, s.media_dir)
+    if right?, do: Process.send_after(self(), {:advance, card.key, s.studied}, @right_ms)
+
+    %{
+      state
+      | session: %{
+          s
+          | progress: progress,
+            queue: queue,
+            marks: marks,
+            seen: seen,
+            last_at: System.monotonic_time(:millisecond),
+            picked: index,
+            studied: s.studied + 1,
+            right: s.right + if(right?, do: 1, else: 0)
+        }
+    }
   end
 
-  def answer(_rating, state), do: state
+  def pick(_index, state), do: state
 
-  def replay(_payload, %{session: %{card: %{}} = session} = state) do
-    play(session)
+  def next(_payload, %{session: %{picked: picked}} = state) when picked != nil,
+    do: next_card(state)
+
+  def next(_payload, state), do: state
+
+  def replay(_payload, %{session: %{card: %{}} = s} = state) do
+    play(s.question.sounds, s.media_dir)
     state
   end
 
@@ -139,12 +193,14 @@ defmodule NervesPhone.Apps.Flashcards.State do
 
   def handle_info({:decks, decks}, state) do
     progress = Progress.all()
+    results = Results.all()
     now = DateTime.utc_now()
     tz = tz()
 
     summaries =
       for deck <- decks do
         {due, new} = counts(deck, progress, now, tz)
+        result = results[deck.id]
 
         %{
           id: deck.id,
@@ -152,12 +208,65 @@ defmodule NervesPhone.Apps.Flashcards.State do
           parent: deck.parent,
           total: length(deck.cards),
           due: due,
-          new: new
+          new: new,
+          last: result && {result.right, result.cards},
+          best_ms: result && result.best_ms
         }
       end
 
     %{state | loading: false, decks: summaries, data: Map.new(decks, &{&1.id, &1})}
   end
+
+  # The cards are dealt: start, once the deck's been seen opening long
+  # enough. Unless the opening's been cancelled meanwhile.
+  def handle_info({:dealt, id, queue}, %{opening: %{id: id, at: at}} = state) do
+    case at + @opening_ms - System.monotonic_time(:millisecond) do
+      wait when wait > 0 ->
+        Process.send_after(self(), {:dealt, id, queue}, wait)
+        state
+
+      _now ->
+        deck = state.data[id]
+
+        {queue, practice?} =
+          if queue == [], do: {Enum.shuffle(deck.cards), true}, else: {queue, false}
+
+        session = %{
+          deck: id,
+          name: deck.name,
+          media_dir: deck.media_dir,
+          cards: deck.cards,
+          progress: Progress.all(),
+          queue: queue,
+          card: nil,
+          question: nil,
+          picked: nil,
+          studied: 0,
+          right: 0,
+          practice: practice?,
+          marks: [],
+          seen: MapSet.new(),
+          started_at: System.monotonic_time(:millisecond),
+          last_at: nil,
+          result: nil
+        }
+
+        next_card(%{state | opening: nil, session: session})
+    end
+  end
+
+  def handle_info({:dealt, _stale, _queue}, state), do: state
+
+  # After a right answer, unless something's moved on since (the same
+  # card back again, unanswered, isn't the one answered).
+  def handle_info(
+        {:advance, key, studied},
+        %{session: %{card: %{key: key}, studied: now_studied, picked: picked}} = state
+      )
+      when now_studied == studied + 1 and picked != nil,
+      do: next_card(state)
+
+  def handle_info({:advance, _key, _studied}, state), do: state
 
   def handle_info(_message, state), do: state
 
@@ -183,35 +292,38 @@ defmodule NervesPhone.Apps.Flashcards.State do
     {due, Enum.take(unseen, Kernel.max(new_per_day() - introduced, 0))}
   end
 
-  defp next_card(%{session: %{queue: [card | queue]} = session} = state) do
-    session = %{session | card: card, queue: queue, revealed: false}
-    play(session)
-    %{state | page: :study, session: session}
+  defp next_card(%{session: %{queue: [card | queue]} = s} = state) do
+    question = Quiz.question(card, s.cards)
+    play(question.sounds, s.media_dir)
+
+    %{
+      state
+      | page: :study,
+        session: %{s | card: card, queue: queue, question: question, picked: nil}
+    }
   end
 
-  defp next_card(%{session: session} = state) do
+  defp next_card(%{session: s} = state) do
     Sound.stop()
-    %{state | page: :done, session: %{session | card: nil, revealed: false}}
+    s = %{s | card: nil, question: nil, picked: nil, result: record(s)}
+    %{state | page: :done, session: s}
   end
 
-  # The sounds on the side showing: on the back, those after the divider
-  # (the front's were heard already).
-  defp play(%{card: card, revealed: revealed, media_dir: dir}) do
-    blocks =
-      if revealed do
-        case Enum.split_while(card.back, &(&1 != :divider)) do
-          {_front, [:divider | answer]} -> answer
-          {back, []} -> back
-        end
-      else
-        card.front
-      end
+  # The round's score, and its time if it was all right first time and
+  # had every card in the deck.
+  defp record(%{marks: []}), do: nil
 
-    case for({:sound, name} <- blocks, do: Path.join(dir, name)) do
-      [] -> Sound.stop()
-      paths -> Sound.play(paths)
-    end
+  defp record(s) do
+    right = Enum.count(s.marks, & &1)
+    cards = length(s.marks)
+    perfect? = right == cards and cards == length(s.cards)
+    ms = if perfect?, do: Kernel.max(s.last_at - s.started_at, 1)
+    {_result, best?} = Results.record(s.deck, right, cards, ms)
+    %{right: right, cards: cards, ms: ms, best: best?}
   end
+
+  defp play([], _dir), do: Sound.stop()
+  defp play(names, dir), do: names |> Enum.map(&Path.join(dir, &1)) |> Sound.play()
 
   defp new_per_day,
     do: Application.get_env(:nerves_phone, :flashcards, []) |> Keyword.get(:new_per_day, 10)

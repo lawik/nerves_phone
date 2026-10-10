@@ -148,6 +148,28 @@ defmodule NervesPhone.KidsTest do
       end
     end
 
+    test "nothing again before everything else, then a show not on offer" do
+      rules = %{Rules.defaults() | offers: 2}
+      slots = [%{path: "paw1", after: 0}, %{path: "bluey1", after: 0}]
+      full = fn path, series -> watch(path, series, "entertainment") end
+      seen = [full.("peppa1", "Peppa"), full.("peppa2", "Peppa"), full.("bluey1", "Bluey")]
+
+      # Peppa's episodes have been watched, paw2 hasn't: paw2, though Paw
+      # Patrol's on offer already.
+      for _ <- 1..10 do
+        assert [%{path: "paw1"}, %{path: "paw2"}] =
+                 refresh(slots, "entertainment", seen, rules)
+      end
+
+      # Everything watched once: a show not on offer, so Peppa again.
+      seen = [full.("paw2", "Paw Patrol") | seen]
+
+      for _ <- 1..10 do
+        assert [%{path: "paw1"}, new] = refresh(slots, "entertainment", seen, rules)
+        assert series([new]) == ["Peppa"]
+      end
+    end
+
     test "gone or re-sorted videos are replaced; the offering grows and shrinks with :offers" do
       slots = [%{path: "num1", after: 0}, %{path: "gone", after: 0}, %{path: "paw1", after: 0}]
       assert [%{path: "num1"}, b, c] = refresh(slots, "education", [])

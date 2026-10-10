@@ -125,6 +125,10 @@ defmodule NervesPhone.MixProject do
       # Touchscreen and buttons (Linux input events)
       {:input_event, "~> 1.4", targets: @all_targets},
 
+      # GPIO lines (fingerprint sensor power/reset/IRQ experiment,
+      # see NervesPhone.Fingerprint)
+      {:circuits_gpio, "~> 2.3", targets: @all_targets},
+
       # ---------------- AI stack ----------------
       # nerves_ai pulls arm_ai (whose NIF builds from source with Rust),
       # nx_arm, the infer_* libraries and the boot helpers.
@@ -150,9 +154,13 @@ defmodule NervesPhone.MixProject do
       {:blue_heron, github: "mlainez/blue_heron", targets: @all_targets},
 
       # ---------------- The Nerves system ----------------
-      # The prebuilt system comes from the tag's GitHub release.
-      {:nerves_system_fp3,
-       github: "mlainez/nerves_system_fp3", tag: "v0.2.2", runtime: false, targets: :fp3}
+      # Upstream v0.2.4 plus patches/linux/0001-...wcd9335-arm-every-TX-port
+      # (branch mic-tx-ports of the local clone), so both microphones can be
+      # captured. The artifact is built on scratch and dropped into
+      # ~/.nerves/dl; see NervesPhone.Audio.Mic. Back to the tagged release
+      # once upstream carries the fix:
+      #   github: "mlainez/nerves_system_fp3", tag: "v0.2.4"
+      {:nerves_system_fp3, path: "../nerves_system_fp3", runtime: false, targets: :fp3}
     ]
   end
 

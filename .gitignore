@@ -29,3 +29,6 @@ erl_crash.dump
 
 # Python and its packages, from "mix python.vendor".
 /priv/python/
+
+# Unpacked firmware, from "mix firmware.unpack".
+/nerves_phone.unpacked/

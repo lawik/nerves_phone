@@ -5,7 +5,7 @@ defmodule NervesPhone.FlashcardsTest do
 
   alias Exqlite.Sqlite3
   alias NervesPhone.Apps.Flashcards
-  alias NervesPhone.Flashcards.{Apkg, Html, Library, Progress, Scheduler, Template}
+  alias NervesPhone.Flashcards.{Apkg, Html, Library, Progress, Quiz, Scheduler, Template}
 
   @app NervesPhone.State
 
@@ -159,6 +159,52 @@ defmodule NervesPhone.FlashcardsTest do
     end
   end
 
+  describe "quiz" do
+    defp card(key, front, answer),
+      do: %{key: key, front: front, back: front ++ [:divider | answer]}
+
+    test "a number's wrong choices are numbers near it" do
+      cards = for n <- 1..10, do: card("#{n}", [{:text, "7 · #{n}"}], [{:text, "#{7 * n}"}])
+      eight = Enum.at(cards, 7)
+
+      for _ <- 1..20 do
+        q = Quiz.question(eight, cards)
+        assert q.prompt == [{:text, "7 · 8"}]
+        assert Enum.at(q.choices, q.correct) == [{:text, "56"}]
+        assert length(q.choices) == 4
+        assert q.choices == Enum.uniq(q.choices)
+
+        for [{:text, n}] <- q.choices,
+            do: assert(abs(String.to_integer(n) - 56) <= 10)
+      end
+    end
+
+    test "a card whose answer is a sound asks the other way round" do
+      cards =
+        for letter <- ~w(a b c d e) do
+          card(letter, [{:image, "#{letter}.jpg"}], [{:sound, "#{letter}.mp3"}])
+        end
+
+      q = Quiz.question(hd(cards), cards)
+      assert q.prompt == [{:sound, "a.mp3"}]
+      assert q.sounds == ["a.mp3"] and q.answer_sounds == []
+      assert Enum.at(q.choices, q.correct) == [{:image, "a.jpg"}]
+      assert length(q.choices) == 4
+    end
+
+    test "choices are what can be seen, and a small deck has fewer" do
+      cards = [
+        card("1", [{:text, "Hund"}], [{:text, "Dog"}, {:sound, "dog.mp3"}]),
+        card("2", [{:text, "Katt"}], [{:text, "Cat"}]),
+        card("3", [{:text, "Kissemiss"}], [{:text, "Cat"}])
+      ]
+
+      q = Quiz.question(hd(cards), cards)
+      assert Enum.sort(q.choices) == [[{:text, "Cat"}], [{:text, "Dog"}]]
+      assert q.sounds == [] and q.answer_sounds == ["dog.mp3"]
+    end
+  end
+
   describe "the app" do
     setup do
       :ok = Supervisor.terminate_child(NervesPhone.Supervisor, {NervesPhone.State, @app})
@@ -192,45 +238,114 @@ defmodule NervesPhone.FlashcardsTest do
              )
     end
 
-    test "studying a deck: reveal, answer, and again until it's learnt" do
+    test "a picked deck shows opening first, other picks wait, and back cancels" do
       wait_for(fn -> not cards().loading end)
-      plus = Enum.find(cards().decks, &(&1.name == "1 Plus upp till 10"))
+      [plus, minus] = Enum.map(["1 Plus upp till 10", "3 Minus upp till 10"], &deck/1)
+
+      Solve.dispatch(@app, :flashcards, :study, plus.id)
+      Solve.dispatch(@app, :flashcards, :study, minus.id)
+      wait_for(fn -> cards().opening == plus.id end)
+      assert cards().page == :decks
+
+      wait_for(fn -> cards().page == :study end)
+      assert cards().opening == nil
+      assert cards().session.deck == plus.id
+
+      # Cancelled before the cards come.
+      Solve.dispatch(@app, :flashcards, :decks, nil)
+      wait_for(fn -> cards().page == :decks and not cards().loading end)
+      Solve.dispatch(@app, :flashcards, :study, minus.id)
+      wait_for(fn -> cards().opening == minus.id end)
+      Solve.dispatch(@app, :flashcards, :decks, nil)
+      Process.sleep(600)
+      assert %{page: :decks, opening: nil} = cards()
+    end
+
+    test "studying: picks grade the cards, until they're learnt" do
+      wait_for(fn -> not cards().loading end)
+      plus = deck("1 Plus upp till 10")
 
       Solve.dispatch(@app, :flashcards, :study, plus.id)
       wait_for(fn -> cards().page == :study end)
 
-      assert %{left: 10, revealed: false, card: %{front: [{:text, "1 + 1"}]} = first} =
+      assert %{left: 10, picked: nil, card: %{front: [{:text, "1 + 1"}]} = first, question: q} =
                cards().session
 
-      # Answering before the answer shows does nothing.
-      Solve.dispatch(@app, :flashcards, :answer, :good)
-      Solve.dispatch(@app, :flashcards, :reveal, nil)
-      wait_for(fn -> cards().session.revealed end)
-      assert cards().session.card == first
+      assert q.prompt == [{:text, "1 + 1"}]
+      assert Enum.at(q.choices, q.correct) == [{:text, "2"}]
 
-      # Again: back after a few cards.
-      Solve.dispatch(@app, :flashcards, :answer, :again)
+      # Wrong: the right one shows, and it waits for the arrow.
+      wrong = Enum.find(0..(length(q.choices) - 1), &(&1 != q.correct))
+      Solve.dispatch(@app, :flashcards, :pick, wrong)
+      wait_for(fn -> cards().session.picked == wrong end)
+
+      # Only one pick a card.
+      Solve.dispatch(@app, :flashcards, :pick, q.correct)
+      Process.sleep(1_300)
+      assert %{picked: ^wrong, card: ^first} = cards().session
+
+      Solve.dispatch(@app, :flashcards, :next, nil)
       wait_for(fn -> cards().session.card != first end)
-      assert cards().session.left == 10
+      assert %{"step" => 0, "lapses" => 0} = Progress.all()[first.key]
 
-      # Easy on everything graduates each card at once.
-      for _ <- 1..20, cards().page == :study do
-        Solve.dispatch(@app, :flashcards, :reveal, nil)
-        Solve.dispatch(@app, :flashcards, :answer, :easy)
-        Process.sleep(10)
+      # Right: on to the next by itself.
+      second = cards().session.card
+      Solve.dispatch(@app, :flashcards, :pick, cards().session.question.correct)
+      wait_for(fn -> cards().session.card != second end, 2_500)
+
+      # Right twice more on each (the arrow skips the wait) learns them all.
+      for _ <- 1..40, cards().page == :study do
+        Solve.dispatch(@app, :flashcards, :pick, cards().session.question.correct)
+        wait_for(fn -> cards().session.picked != nil end)
+        Solve.dispatch(@app, :flashcards, :next, nil)
+        wait_for(fn -> cards().page != :study or cards().session.picked == nil end)
       end
 
-      wait_for(fn -> cards().page == :done end)
-      assert cards().session.studied == 11
-      assert %{"ivl" => 4, "reps" => 2} = Progress.all()[first.key]
+      # Ten cards, one wrong the first time: 9 of 10, and not timed.
+      assert %{page: :done, session: %{studied: 21, right: 20, marks: marks, result: result}} =
+               cards()
+
+      assert [false | rest] = marks
+      assert length(rest) == 9 and Enum.all?(rest)
+      assert %{right: 9, cards: 10, ms: nil, best: false} = result
+      assert %{"step" => nil, "ivl" => 1} = Progress.all()[first.key]
 
       # Nothing more today: the ten new ones are used up.
       Solve.dispatch(@app, :flashcards, :decks, nil)
       wait_for(fn -> cards().page == :decks and not cards().loading end)
-      assert %{new: 0, due: 0} = Enum.find(cards().decks, &(&1.id == plus.id))
+      assert %{new: 0, due: 0, last: {9, 10}, best_ms: nil} = deck("1 Plus upp till 10")
     end
 
-    test "renders the decks, a card and its answer, and done" do
+    test "with nothing due, the whole deck is practice, and a perfect round is timed" do
+      wait_for(fn -> not cards().loading end)
+      %{id: id} = djur = deck("Djur")
+      assert %{last: nil, best_ms: nil} = djur
+
+      # Learn its one card for today.
+      Solve.dispatch(@app, :flashcards, :study, id)
+      wait_for(fn -> cards().page == :study end)
+      refute cards().session.practice
+      answer_all_right()
+      Solve.dispatch(@app, :flashcards, :decks, nil)
+      wait_for(fn -> cards().page == :decks and not cards().loading end)
+      assert %{new: 0, due: 0, last: {1, 1}, best_ms: best} = deck("Djur")
+      assert best > 0
+      progress = Progress.all()
+
+      # Again: practice, the schedule untouched, and the time kept if faster.
+      Solve.dispatch(@app, :flashcards, :study, id)
+      wait_for(fn -> cards().page == :study end)
+      assert cards().session.practice
+      answer_all_right()
+      assert %{right: 1, cards: 1, ms: ms} = cards().session.result
+      assert Progress.all() == progress
+
+      Solve.dispatch(@app, :flashcards, :decks, nil)
+      wait_for(fn -> cards().page == :decks and not cards().loading end)
+      assert deck("Djur").best_ms == min(ms, best)
+    end
+
+    test "renders the decks, opening one, questions, answers and done" do
       viewport =
         start_supervised!(
           {NervesPhone.UI,
@@ -242,28 +357,56 @@ defmodule NervesPhone.FlashcardsTest do
       wait_for(fn -> not cards().loading end)
       snapshot(viewport, "flashcards-0-decks")
 
-      djur = Enum.find(cards().decks, &(&1.name == "Djur"))
-      Solve.dispatch(@app, :flashcards, :study, djur.id)
+      plus = deck("1 Plus upp till 10")
+      Solve.dispatch(@app, :flashcards, :study, plus.id)
+      wait_for(fn -> cards().opening == plus.id end)
+      snapshot(viewport, "flashcards-1-opening", 100)
+
       wait_for(fn -> cards().page == :study end)
-      snapshot(viewport, "flashcards-1-picture")
+      snapshot(viewport, "flashcards-2-question")
 
-      Solve.dispatch(@app, :flashcards, :reveal, nil)
-      wait_for(fn -> cards().session.revealed end)
-      snapshot(viewport, "flashcards-2-picture-answer")
+      q = cards().session.question
+      Solve.dispatch(@app, :flashcards, :pick, q.correct)
+      wait_for(fn -> cards().session.picked != nil end)
+      snapshot(viewport, "flashcards-3-right")
 
-      Solve.dispatch(@app, :flashcards, :answer, :easy)
-      wait_for(fn -> cards().page == :done end)
-      snapshot(viewport, "flashcards-3-done")
+      Solve.dispatch(@app, :flashcards, :next, nil)
+      wait_for(fn -> cards().session.picked == nil end)
+      q = cards().session.question
+      Solve.dispatch(@app, :flashcards, :pick, rem(q.correct + 1, length(q.choices)))
+      wait_for(fn -> cards().session.picked != nil end)
+      snapshot(viewport, "flashcards-4-wrong")
 
       Solve.dispatch(@app, :flashcards, :decks, nil)
       wait_for(fn -> cards().page == :decks and not cards().loading end)
-      sju = Enum.find(cards().decks, &(&1.name == "7:ans tabell"))
-      Solve.dispatch(@app, :flashcards, :study, sju.id)
+      Solve.dispatch(@app, :flashcards, :study, deck("Djur").id)
       wait_for(fn -> cards().page == :study end)
-      Solve.dispatch(@app, :flashcards, :reveal, nil)
-      wait_for(fn -> cards().session.revealed end)
-      snapshot(viewport, "flashcards-4-sum-answer")
+      snapshot(viewport, "flashcards-5-picture")
+
+      # Right until it's learnt, then done.
+      for _ <- 1..3, cards().page == :study do
+        Solve.dispatch(@app, :flashcards, :pick, cards().session.question.correct)
+        wait_for(fn -> cards().session.picked != nil end)
+        Solve.dispatch(@app, :flashcards, :next, nil)
+        wait_for(fn -> cards().page != :study or cards().session.picked == nil end)
+      end
+
+      assert cards().page == :done
+      snapshot(viewport, "flashcards-6-done")
     end
+  end
+
+  defp deck(name), do: Enum.find(cards().decks, &(&1.name == name))
+
+  defp answer_all_right do
+    for _ <- 1..10, cards().page == :study do
+      Solve.dispatch(@app, :flashcards, :pick, cards().session.question.correct)
+      wait_for(fn -> cards().session.picked != nil end)
+      Solve.dispatch(@app, :flashcards, :next, nil)
+      wait_for(fn -> cards().page != :study or cards().session.picked == nil end)
+    end
+
+    assert cards().page == :done
   end
 
   defp cards, do: Solve.subscribe(@app, :flashcards)
@@ -361,8 +504,8 @@ defmodule NervesPhone.FlashcardsTest do
 
   # ---------- Helpers ----------
 
-  defp snapshot(viewport, name) do
-    Process.sleep(300)
+  defp snapshot(viewport, name, settle_ms \\ 300) do
+    Process.sleep(settle_ms)
     {:ok, png} = EmergeSkia.render_to_png(Emerge.renderer(viewport), timeout: 5_000)
     assert <<0x89, "PNG", _::binary>> = png
 
