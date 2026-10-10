@@ -125,7 +125,7 @@ defmodule NervesPhone.MixProject do
       # Touchscreen and buttons (Linux input events)
       {:input_event, "~> 1.4", targets: @all_targets},
 
-      # GPIO lines (the fingerprint sensor experiment, Fp3Extras.Fingerprint)
+      # GPIO lines (used by Fp3Extras.Fingerprint)
       {:circuits_gpio, "~> 2.3", targets: @all_targets},
 
       # The phone's hardware (backlight and screen timeouts, volume, buttons,

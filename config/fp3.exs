@@ -228,8 +228,7 @@ config :ex_audio,
   ]
 
 # Fp3Extras.Mic switches the top mic through ex_audio. Two-channel capture
-# needs the kernel fixes nerves_system_fp3 carries as patches/linux (after
-# v0.3.0); on an older system it records silence or crashes the kernel.
+# depends on the SLIMbus capture support in the nerves_system_fp3 kernel.
 
 # Bluetooth LE through the kernel's hci0 (the WCN3680 behind btqcomsmd).
 # BlueHeron takes the controller over exclusively, so bluetoothd must not
