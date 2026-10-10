@@ -19,18 +19,8 @@ config :logger, RingLogger,
 config :emerge, compiled_backends: [drm: [:opengl]]
 
 # The msm DRM device that drives the panel. See EmergeSkia.drm_outputs/1.
-#
-# Rendered with OpenGL ES on the Adreno 506 (Mesa freedreno). The driver's
-# GMEM tiling path hangs on Skia's MSAA depth/stencil attachments, so
-# rel/vm.args.eex sets FD_MESA_DEBUG=sysmem to bypass it.
-#
-# The renderer cache is off: with it, Emerge 0.4.2's DRM presenter can
-# skip a scene that arrives while an older one is staged behind a page
-# flip (a tap's press style, then the screen it opens). It takes the new
-# scene's fingerprint when it submits the old one, then counts the new
-# one as already shown, so the screen stays stale until the next touch.
-# See can_skip_unchanged_visible_frame in emerge_skia's renderer.rs and
-# its use in backend/drm/gl.rs.
+# The renderer cache is off: Emerge 0.4.2's DRM presenter can skip a scene
+# that arrives while an older one is staged behind a page flip.
 config :nerves_phone, :viewport,
   backend: :drm,
   drm_card: "/dev/dri/card0",
@@ -226,9 +216,6 @@ config :ex_audio,
     {"DMIC MUX7", "DMIC1"},
     {"AIF1_CAP Mixer SLIM TX7", :on}
   ]
-
-# Fp3Extras.Mic switches the top mic through ex_audio. Two-channel capture
-# depends on the SLIMbus capture support in the nerves_system_fp3 kernel.
 
 # Bluetooth LE through the kernel's hci0 (the WCN3680 behind btqcomsmd).
 # BlueHeron takes the controller over exclusively, so bluetoothd must not
