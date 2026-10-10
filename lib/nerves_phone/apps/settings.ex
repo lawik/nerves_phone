@@ -8,8 +8,9 @@ defmodule NervesPhone.Apps.Settings do
     * **Network** - every interface with its connection, addresses and MAC,
       and the name servers.
     * **Display** - brightness, by hand or following the light the front
-      camera measures, when the screen dims and goes black
-      (`Fp3Extras.Screen`), and whether the screen turns with the phone
+      camera measures, when the screen dims and goes black, and how long
+      after that the phone suspends (`Fp3Extras.Screen`,
+      `NervesPhone.Hardware.suspend/0`), and whether the screen turns with the phone
       (`Fp3Extras.Orientation`).
     * **Device** - model, hostname, serial number, firmware, system,
       memory, storage and battery (`NervesPhone.DeviceInfo`).
@@ -468,6 +469,15 @@ defmodule NervesPhone.Apps.Settings do
         {duration(ms), ms == display.off_after_ms, event(settings, :display, {:off_after_ms, ms})}
       end
 
+    # Counted from the screen going black, so it needs a "turn off after".
+    suspend_choices =
+      for ms <- Screen.suspend_choices() do
+        usable? = ms == nil or display.off_after_ms != nil
+
+        {duration(ms), ms == display.suspend_after_ms,
+         usable? && event(settings, :display, {:suspend_after_ms, ms})}
+      end
+
     scroll_list(
       [section("Brightness"), auto_row] ++
         brightness ++
@@ -475,7 +485,9 @@ defmodule NervesPhone.Apps.Settings do
           section("Dim after"),
           choices(:dim_choices, dim_choices),
           section("Turn off after"),
-          choices(:off_choices, off_choices)
+          choices(:off_choices, off_choices),
+          section("Suspend after turning off"),
+          choices(:suspend_choices, suspend_choices)
         ] ++ rotation(settings, orientation)
     )
   end

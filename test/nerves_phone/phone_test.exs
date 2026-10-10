@@ -148,6 +148,14 @@ defmodule NervesPhone.PhoneTest do
       wait_for(fn -> Solve.subscribe(@app, :device).screen_on end)
     end
 
+    test "suspending needs the screen to turn off" do
+      Solve.dispatch(@app, :settings, :display, {:off_after_ms, 60_000})
+      Solve.dispatch(@app, :settings, :display, {:suspend_after_ms, 300_000})
+      wait_for(fn -> display().suspend_after_ms == 300_000 end)
+      Solve.dispatch(@app, :settings, :display, {:off_after_ms, nil})
+      wait_for(fn -> display().off_after_ms == nil and display().suspend_after_ms == nil end)
+    end
+
     test "dimming at or after turning off is turned off" do
       Solve.dispatch(@app, :settings, :display, {:dim_after_ms, 120_000})
       Solve.dispatch(@app, :settings, :display, {:off_after_ms, 60_000})

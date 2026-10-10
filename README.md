@@ -26,7 +26,9 @@ and Back and Home at the bottom. Settings is the one app there is.
   * *Network:* each interface's status, addresses and MAC, and the name
     servers.
   * *Display:* brightness on a slider, or automatic, following the light
-    the front camera measures. When the screen dims and when it goes black.
+    the front camera measures. When the screen dims, when it goes black,
+    and how long after that the phone suspends (until the power button,
+    USB or the charger wakes it; never, until set).
   * *Device:* model, hostname, serial number, firmware, kernel, uptime,
     memory, storage and battery.
 * **Buttons:** a tap on power turns the screen off or on.

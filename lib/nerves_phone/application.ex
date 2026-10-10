@@ -31,6 +31,7 @@ defmodule NervesPhone.Application do
           {NervesPhone.State, name: NervesPhone.State},
           {Fp3Extras.Screen,
            notify: &NervesPhone.Hardware.screen_event/1,
+           on_suspend: &NervesPhone.Hardware.suspend/0,
            defaults: Application.get_env(:nerves_phone, :display, [])},
           # Which way up the UI is, from the accelerometer.
           {Fp3Extras.Orientation, notify: &NervesPhone.Hardware.orientation_event/1}

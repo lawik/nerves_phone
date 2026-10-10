@@ -7,6 +7,8 @@ defmodule NervesPhone.Hardware do
   (`NervesPhone.State.Device`).
   """
 
+  require Logger
+
   @app NervesPhone.State
 
   @doc "A screen event: the panel going black or coming back, or the display settings."
@@ -23,5 +25,33 @@ defmodule NervesPhone.Hardware do
   def volume_button(direction) do
     level = if direction == :up, do: Fp3Extras.Volume.up(), else: Fp3Extras.Volume.down()
     Solve.dispatch(@app, :device, :volume_changed, level)
+  end
+
+  @doc """
+  The screen has been black for the time set in Settings › Display:
+  suspend the phone (`Fp3Extras.Sleep`) until the power button, the USB
+  cable or the charger wakes it. Called by `Fp3Extras.Screen` in a process
+  of its own, and returns once the phone is awake and Wi-Fi is back (or
+  given up on). The screen stays black: the power button that wakes the
+  phone is also a tap, which brightens it, while a charger wake leaves it
+  dark and the count towards the next suspend starts over.
+
+  The UI doesn't render while the screen is black, so nothing is drawn
+  mid-suspend; there's no RTC alarm, as nothing needs the phone awake on
+  a schedule yet.
+  """
+  def suspend do
+    case Fp3Extras.Sleep.sleep() do
+      {:ok, wake} ->
+        Logger.info(
+          "[hardware] woke by #{wake.woke_by} after #{wake.slept_ms} ms, Wi-Fi #{inspect(wake.wifi)}"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[hardware] couldn't suspend: #{inspect(reason)}")
+        {:error, reason}
+    end
   end
 end
