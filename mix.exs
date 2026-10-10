@@ -101,7 +101,7 @@ defmodule NervesPhone.MixProject do
       {:membrane_aac_plugin, "~> 0.19.4", targets: @all_targets},
       {:membrane_aac_fdk_plugin, "~> 0.19.0", targets: @all_targets},
       {:membrane_video_interop, "~> 0.1.1", targets: @all_targets},
-      {:membrane_v4l2_decoder, path: "../membrane_v4l2_decoder", targets: @all_targets},
+      {:membrane_v4l2_decoder, github: "lawik/membrane_v4l2_decoder", targets: @all_targets},
 
       # Embedded Python, for svtplay-dl and yt-dlp (see NervesPhone.Python).
       {:pythonx, "~> 0.4.10"},
@@ -131,7 +131,7 @@ defmodule NervesPhone.MixProject do
       # The phone's hardware (backlight and screen timeouts, volume, buttons,
       # orientation, the camera as a light sensor, the mics, battery,
       # suspend). Runs on the host too, with the hardware absent.
-      {:fp3_extras, path: "../fp3_extras"},
+      {:fp3_extras, github: "lawik/fp3_extras"},
 
       # ---------------- AI stack ----------------
       # nerves_ai pulls arm_ai (whose NIF builds from source with Rust),
@@ -161,8 +161,8 @@ defmodule NervesPhone.MixProject do
 
       # ---------------- The Nerves system ----------------
       # The prebuilt system comes from the tag's GitHub release.
-      # TEE experiment: tee-qseecom branch, see lib/nerves_phone/tee/qseecom.ex
-      {:nerves_system_fp3, path: "../nerves_system_fp3-tee", runtime: false, targets: :fp3}
+      {:nerves_system_fp3,
+       github: "mlainez/nerves_system_fp3", tag: "v0.3.0", runtime: false, targets: :fp3}
     ]
   end
 

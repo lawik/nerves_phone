@@ -228,9 +228,8 @@ config :ex_audio,
   ]
 
 # Fp3Extras.Mic switches the top mic through ex_audio. Two-channel capture
-# records silence on nerves_system_fp3 v0.2.4 and a channel mismatch crashes
-# the kernel, so switching the top mic on is refused until Fp3Extras.Mic is
-# started with `experimental: true` (in NervesPhone.Application).
+# needs the kernel fixes nerves_system_fp3 carries as patches/linux (after
+# v0.3.0); on an older system it records silence or crashes the kernel.
 
 # Bluetooth LE through the kernel's hci0 (the WCN3680 behind btqcomsmd).
 # BlueHeron takes the controller over exclusively, so bluetoothd must not
