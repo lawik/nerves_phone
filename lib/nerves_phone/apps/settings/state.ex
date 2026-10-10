@@ -4,7 +4,7 @@ defmodule NervesPhone.Apps.Settings.State do
   around, the network interfaces, facts about the phone, the tailnet
   (`NervesPhone.Tailscale`), and Erlang distribution and its cookie
   (`NervesPhone.Distribution`). Display
-  settings are passed on to `NervesPhone.Screen`, which keeps them and
+  settings are passed on to `Fp3Extras.Screen`, which keeps them and
   reports them through the `:device` controller.
 
   Pages are `:wifi`, `:network`, `:display`, `:device`, `:tailscale`,
@@ -40,7 +40,8 @@ defmodule NervesPhone.Apps.Settings.State do
       :tailscale_login
     ]
 
-  alias NervesPhone.{DeviceInfo, Distribution, Net, Screen, Tailscale}
+  alias Fp3Extras.Screen
+  alias NervesPhone.{DeviceInfo, Distribution, Net, Tailscale}
 
   @poll_ms 2_000
   @scan_ms 5_000
@@ -153,7 +154,7 @@ defmodule NervesPhone.Apps.Settings.State do
 
   # A display setting: `{:auto, true}`, `{:dim_after_ms, 30_000}`, ...
   def display({:rotation, mode}, state) do
-    NervesPhone.Orientation.put_mode(mode)
+    Fp3Extras.Orientation.put_mode(mode)
     state
   end
 

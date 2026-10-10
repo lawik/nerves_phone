@@ -62,9 +62,7 @@ re-renders while the screen is off.
 | `lib/nerves_phone/state/` | Solve controllers: shell (which app is open), device |
 | `lib/nerves_phone/net.ex` | The network through VintageNet, with a stand-in on the host |
 | `lib/nerves_phone/device_info.ex` | Facts about the phone for Settings |
-| `lib/nerves_phone/buttons.ex` | Hardware buttons and touch activity |
-| `lib/nerves_phone/screen.ex` | Brightness, dimming and turning off, with fades |
-| `lib/nerves_phone/light_sensor.ex` | Ambient light from the front camera |
+| `lib/nerves_phone/hardware.ex` | Where `fp3_extras` (buttons, screen, orientation) reports into the `:device` controller |
 | `mix.exs` | Also trims the release |
 | `priv/fonts`, `priv/icons` | IBM Plex Sans (OFL, see `LICENSE.txt`) and SVG icons |
 | `config/fp3.exs` | Phone config: display, networking, audio, screen timeout, partition grow |
@@ -142,7 +140,7 @@ After that, update over the network with `mix upload`.
   at boot (`config :ex_audio` in `config/fp3.exs`); the route is the same
   for the FP3's AW8898 and the FP3+'s TAS2557 amplifier. Recording from
   ALSA device `mic` (or `hw:0,1`) is mono from the bottom mic. The top
-  (noise-reference) mic is off by default; `NervesPhone.Audio.Mic` turns it
+  (noise-reference) mic is off by default; `Fp3Extras.Mic` turns it
   on as a second channel for code that processes the pair itself. Nothing
   in the stack cancels noise or echo for recordings.
 * **Brightness.** The panel's backlight is `/sys/class/backlight/*`
@@ -150,7 +148,7 @@ After that, update over the network with `mix upload`.
   so automatic brightness takes two small frames from the front camera
   about once a minute while the screen is fully on (about 1.2 s of
   `cam-snap`), and measures how fast the signal rises with exposure. See
-  `NervesPhone.LightSensor` for how, and `config :nerves_phone,
+  `Fp3Extras.LightSensor` for how, and `config :fp3_extras,
   :light_sensor, dark: ..., bright: ...` to recalibrate.
 * **Hardware libraries**, all started at boot: `ex_qcom_smgr` (sensors),
   `fp3_camera`, `ex_audio`, `ex_nfc`, `ex_location` (GPS), `blue_heron`

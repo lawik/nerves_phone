@@ -5,7 +5,7 @@ defmodule NervesPhone.Flashcards.Sound do
 
   On the phone they're turned into WAV with `ffmpeg` the first time (kept
   next to the deck's media) and played with `aplay`, through ALSA's
-  software volume like everything else (`NervesPhone.Audio.Volume`). On
+  software volume like everything else (`Fp3Extras.Volume`). On
   the host, macOS's `afplay` plays them as they are. `config :nerves_phone,
   :flashcards, sound: nil` turns sound off (as in tests).
   """
@@ -66,7 +66,7 @@ defmodule NervesPhone.Flashcards.Sound do
       # Volume's control appears once the sound card's open.
       spawn(fn ->
         Process.sleep(200)
-        NervesPhone.Audio.Volume.reapply()
+        Fp3Extras.Volume.reapply()
       end)
 
       run("aplay", ["-q", wav])

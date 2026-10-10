@@ -108,43 +108,43 @@ defmodule NervesPhone.PhoneTest do
   describe "the screen" do
     setup do
       on_exit(fn ->
-        NervesPhone.Screen.put_settings(
+        Fp3Extras.Screen.put_settings(
           brightness: 60,
           auto: false,
           dim_after_ms: nil,
           off_after_ms: nil
         )
 
-        Application.delete_env(:nerves_phone, :light_sensor)
+        Application.delete_env(:fp3_extras, :light_sensor)
       end)
     end
 
     test "dims without touches, then goes black, and a touch wakes it" do
       # The shortest choices: dim after 15 s, black after 30 s. Rather than
       # wait, the clock is moved by putting the last touch in the past.
-      NervesPhone.Screen.put_settings(dim_after_ms: 15_000, off_after_ms: 30_000)
+      Fp3Extras.Screen.put_settings(dim_after_ms: 15_000, off_after_ms: 30_000)
       wait_for(fn -> display().dim_after_ms == 15_000 end)
 
-      :sys.replace_state(NervesPhone.Screen, &%{&1 | last_touch: &1.last_touch - 16_000})
-      wait_for(fn -> :sys.get_state(NervesPhone.Screen).mode == :dim end)
+      :sys.replace_state(Fp3Extras.Screen, &%{&1 | last_touch: &1.last_touch - 16_000})
+      wait_for(fn -> :sys.get_state(Fp3Extras.Screen).mode == :dim end)
       assert Solve.subscribe(@app, :device).screen_on
 
       # It fades rather than jumping.
       Process.sleep(200)
-      %{level: level} = :sys.get_state(NervesPhone.Screen)
+      %{level: level} = :sys.get_state(Fp3Extras.Screen)
       assert level > 60 * 0.35 and level < 60
 
-      :sys.replace_state(NervesPhone.Screen, &%{&1 | last_touch: &1.last_touch - 31_000})
+      :sys.replace_state(Fp3Extras.Screen, &%{&1 | last_touch: &1.last_touch - 31_000})
       wait_for(fn -> not Solve.subscribe(@app, :device).screen_on end, 3_000)
-      assert :sys.get_state(NervesPhone.Screen).level == 0.0
+      assert :sys.get_state(Fp3Extras.Screen).level == 0.0
 
-      NervesPhone.Screen.touch()
+      Fp3Extras.Screen.touch()
       wait_for(fn -> Solve.subscribe(@app, :device).screen_on end)
-      wait_for(fn -> :sys.get_state(NervesPhone.Screen).level == 60.0 end)
+      wait_for(fn -> :sys.get_state(Fp3Extras.Screen).level == 60.0 end)
 
-      NervesPhone.Screen.toggle()
+      Fp3Extras.Screen.toggle()
       wait_for(fn -> not Solve.subscribe(@app, :device).screen_on end, 3_000)
-      NervesPhone.Screen.toggle()
+      Fp3Extras.Screen.toggle()
       wait_for(fn -> Solve.subscribe(@app, :device).screen_on end)
     end
 
@@ -157,16 +157,16 @@ defmodule NervesPhone.PhoneTest do
     test "brightness fades to what's set" do
       Solve.dispatch(@app, :settings, :brightness, 30)
       wait_for(fn -> display().brightness == 30 end)
-      wait_for(fn -> :sys.get_state(NervesPhone.Screen).level == 30.0 end)
+      wait_for(fn -> :sys.get_state(Fp3Extras.Screen).level == 30.0 end)
     end
 
     test "automatic brightness follows the light" do
-      Application.put_env(:nerves_phone, :light_sensor, host_light: 0.00075)
+      Application.put_env(:fp3_extras, :light_sensor, host_light: 0.00075)
       Solve.dispatch(@app, :settings, :display, {:auto, true})
       wait_for(fn -> display().auto and display().light == "Dim" end)
       assert display().level in 25..35
 
-      Application.put_env(:nerves_phone, :light_sensor, host_light: 0.3)
+      Application.put_env(:fp3_extras, :light_sensor, host_light: 0.3)
       Solve.dispatch(@app, :settings, :measure_light, nil)
       wait_for(fn -> display().light == "Very bright" and display().level > 90 end)
     end
@@ -208,12 +208,12 @@ defmodule NervesPhone.PhoneTest do
     Solve.dispatch(@app, :settings, :show, :display)
     snapshot(viewport, "6-display")
 
-    Application.put_env(:nerves_phone, :light_sensor, host_light: 0.00075)
+    Application.put_env(:fp3_extras, :light_sensor, host_light: 0.00075)
     Solve.dispatch(@app, :settings, :display, {:auto, true})
     wait_for(fn -> display().light != nil end)
     snapshot(viewport, "6-display-auto")
     Solve.dispatch(@app, :settings, :display, {:auto, false})
-    Application.delete_env(:nerves_phone, :light_sensor)
+    Application.delete_env(:fp3_extras, :light_sensor)
 
     Solve.dispatch(@app, :settings, :show, :device)
     wait_for(fn -> settings().info != [] end)
@@ -280,14 +280,14 @@ defmodule NervesPhone.PhoneTest do
     Solve.dispatch(@app, :shell, :open, Settings)
     Solve.dispatch(@app, :settings, :display, {:rotation, :landscape})
     wait_for(fn -> device().orientation.orientation == :landscape_left end)
-    assert NervesPhone.Orientation.current().mode == :landscape
+    assert Fp3Extras.Orientation.current().mode == :landscape
 
     Solve.dispatch(@app, :settings, :display, {:rotation, :portrait})
     wait_for(fn -> device().orientation.orientation == :portrait end)
   end
 
   test "readings point to an orientation only when clearly tilted" do
-    alias NervesPhone.Orientation
+    alias Fp3Extras.Orientation
     g = 9.81
 
     assert Orientation.classify(%{x: 0.0, y: g}) == :portrait
@@ -306,7 +306,7 @@ defmodule NervesPhone.PhoneTest do
   defp device, do: Solve.subscribe(@app, :device)
 
   defp orient(mode) do
-    NervesPhone.Orientation.put_mode(mode)
+    Fp3Extras.Orientation.put_mode(mode)
     expected = if mode == :landscape, do: :landscape_left, else: :portrait
     wait_for(fn -> device().orientation.orientation == expected end)
   end

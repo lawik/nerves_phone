@@ -169,12 +169,12 @@ defmodule NervesPhone.Apps.Videos.State do
     case status do
       :playing ->
         player().pause(pipeline)
-        NervesPhone.Screen.keep_awake(false)
+        Fp3Extras.Screen.keep_awake(false)
         show_controls(%{state | playback: %{p | status: :paused}})
 
       :paused ->
         player().resume(pipeline)
-        NervesPhone.Screen.keep_awake(true)
+        Fp3Extras.Screen.keep_awake(true)
         show_controls(%{state | playback: %{p | status: :playing}})
 
       _other ->
@@ -276,7 +276,7 @@ defmodule NervesPhone.Apps.Videos.State do
   def handle_info({:handover_timeout, _stale}, state), do: state
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{playback: %{monitor: ref} = p} = state) do
-    NervesPhone.Screen.keep_awake(false)
+    Fp3Extras.Screen.keep_awake(false)
     status = if p.status in [:ended, :stopped], do: p.status, else: {:error, {:crashed, reason}}
     %{state | playback: %{p | pipeline: nil, monitor: nil, status: status}}
   end
@@ -346,7 +346,7 @@ defmodule NervesPhone.Apps.Videos.State do
 
     case player().start(p.path, self(), p.target, opts) do
       {:ok, pipeline} ->
-        NervesPhone.Screen.keep_awake(true)
+        Fp3Extras.Screen.keep_awake(true)
 
         %{state | playback: %{p | pipeline: pipeline, monitor: Process.monitor(pipeline)}}
 
@@ -361,7 +361,7 @@ defmodule NervesPhone.Apps.Videos.State do
   # (see the moduledoc), watching it until it's gone.
   defp stop_playback(%{playback: %{pipeline: pipeline, monitor: monitor}} = state)
        when pipeline != nil do
-    NervesPhone.Screen.keep_awake(false)
+    Fp3Extras.Screen.keep_awake(false)
     save_played(state.playback)
     Process.send_after(self(), {:stop_pipeline, pipeline}, @stop_delay_ms)
     %{state | playback: nil, page: :offers, stopping: Map.put(state.stopping, monitor, pipeline)}

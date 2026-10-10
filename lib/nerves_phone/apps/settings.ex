@@ -9,8 +9,8 @@ defmodule NervesPhone.Apps.Settings do
       and the name servers.
     * **Display** - brightness, by hand or following the light the front
       camera measures, when the screen dims and goes black
-      (`NervesPhone.Screen`), and whether the screen turns with the phone
-      (`NervesPhone.Orientation`).
+      (`Fp3Extras.Screen`), and whether the screen turns with the phone
+      (`Fp3Extras.Orientation`).
     * **Device** - model, hostname, serial number, firmware, system,
       memory, storage and battery (`NervesPhone.DeviceInfo`).
     * **Tailscale** - whether the phone is on the tailnet, its name and
@@ -29,7 +29,8 @@ defmodule NervesPhone.Apps.Settings do
   import NervesPhone.UI.Theme
   import Solve.Lookup, only: [solve: 2, event: 2, event: 3]
 
-  alias NervesPhone.{Net, Screen}
+  alias Fp3Extras.Screen
+  alias NervesPhone.Net
   alias NervesPhone.UI.Keyboard
 
   @app NervesPhone.State

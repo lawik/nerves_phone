@@ -13,8 +13,10 @@ defmodule NervesPhone.Application do
         # Starts a worker by calling: NervesPhone.Worker.start_link(arg)
         # {NervesPhone.Worker, arg},
         {Task.Supervisor, name: NervesPhone.TaskSupervisor},
-        NervesPhone.Audio.Volume,
-        NervesPhone.Audio.Mic,
+        # The phone's hardware, from fp3_extras; NervesPhone.Hardware feeds
+        # what they report into the :device controller.
+        Fp3Extras.Volume,
+        Fp3Extras.Mic,
         NervesPhone.Kids.History,
         NervesPhone.Flashcards.Progress,
         NervesPhone.Flashcards.Sound,
@@ -27,9 +29,11 @@ defmodule NervesPhone.Application do
         target_children() ++
         [
           {NervesPhone.State, name: NervesPhone.State},
-          NervesPhone.Screen,
+          {Fp3Extras.Screen,
+           notify: &NervesPhone.Hardware.screen_event/1,
+           defaults: Application.get_env(:nerves_phone, :display, [])},
           # Which way up the UI is, from the accelerometer.
-          NervesPhone.Orientation
+          {Fp3Extras.Orientation, notify: &NervesPhone.Hardware.orientation_event/1}
         ] ++
         ui_children()
 
@@ -47,8 +51,8 @@ defmodule NervesPhone.Application do
       do: [
         {NervesPhone.UI, name: NervesPhone.UI},
         # With the UI up, the kernel's console comes off the panel (see
-        # NervesPhone.Console). A no-op on the host.
-        {Task, &NervesPhone.Console.release_panel/0}
+        # Fp3Extras.Console). A no-op on the host.
+        {Task, &Fp3Extras.Console.release_panel/0}
       ],
       else: []
   end
@@ -72,8 +76,11 @@ defmodule NervesPhone.Application do
         # Children for all targets except host
         # Starts a worker by calling: Target.Worker.start_link(arg)
         # {Target.Worker, arg},
-        # The power button, and touches for the screen timeout.
-        NervesPhone.Buttons,
+        # The volume and power buttons, and touches for the screen timeout.
+        {Fp3Extras.Buttons,
+         on_touch: &Fp3Extras.Screen.touch/0,
+         on_power_tap: &Fp3Extras.Screen.toggle/0,
+         on_volume: &NervesPhone.Hardware.volume_button/1},
         # Keeps the phone on the tailnet.
         NervesPhone.Tailscale,
         # epmd, and the phone as a distribution node.

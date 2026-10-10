@@ -125,9 +125,13 @@ defmodule NervesPhone.MixProject do
       # Touchscreen and buttons (Linux input events)
       {:input_event, "~> 1.4", targets: @all_targets},
 
-      # GPIO lines (fingerprint sensor power/reset/IRQ experiment,
-      # see NervesPhone.Fingerprint)
+      # GPIO lines (the fingerprint sensor experiment, Fp3Extras.Fingerprint)
       {:circuits_gpio, "~> 2.3", targets: @all_targets},
+
+      # The phone's hardware (backlight and screen timeouts, volume, buttons,
+      # orientation, the camera as a light sensor, the mics, battery,
+      # suspend). Runs on the host too, with the hardware absent.
+      {:fp3_extras, path: "../fp3_extras"},
 
       # ---------------- AI stack ----------------
       # nerves_ai pulls arm_ai (whose NIF builds from source with Rust),
@@ -136,10 +140,12 @@ defmodule NervesPhone.MixProject do
 
       # ---------------- FP3 hardware userspace ----------------
       {:ex_rmtfs, github: "mlainez/ex_rmtfs", targets: @all_targets},
-      {:ex_remoteproc, github: "mlainez/ex_remoteproc", override: true, targets: @all_targets},
+      # ex_remoteproc and ex_audio are fp3_extras's too, so they're built for
+      # the host as well; config/host.exs keeps them from kicking the ADSP.
+      {:ex_remoteproc, github: "mlainez/ex_remoteproc", override: true},
       {:ex_qcom_smgr, github: "mlainez/ex_qcom_smgr", override: true, targets: @all_targets},
       {:ex_qbootctl, github: "mlainez/ex_qbootctl", override: true, targets: @all_targets},
-      {:ex_audio, github: "mlainez/ex_audio", override: true, targets: @all_targets},
+      {:ex_audio, github: "mlainez/ex_audio", override: true},
       {:fp3_camera, github: "mlainez/fp3_camera", override: true, targets: @all_targets},
       {:qmi,
        github: "mlainez/qmi", branch: "qrtr-transport", override: true, targets: @all_targets},
@@ -154,13 +160,9 @@ defmodule NervesPhone.MixProject do
       {:blue_heron, github: "mlainez/blue_heron", targets: @all_targets},
 
       # ---------------- The Nerves system ----------------
-      # Upstream v0.2.4 plus patches/linux/0001-...wcd9335-arm-every-TX-port
-      # (branch mic-tx-ports of the local clone), so both microphones can be
-      # captured. The artifact is built on scratch and dropped into
-      # ~/.nerves/dl; see NervesPhone.Audio.Mic. Back to the tagged release
-      # once upstream carries the fix:
-      #   github: "mlainez/nerves_system_fp3", tag: "v0.2.4"
-      {:nerves_system_fp3, path: "../nerves_system_fp3", runtime: false, targets: :fp3}
+      # The prebuilt system comes from the tag's GitHub release.
+      # TEE experiment: tee-qseecom branch, see lib/nerves_phone/tee/qseecom.ex
+      {:nerves_system_fp3, path: "../nerves_system_fp3-tee", runtime: false, targets: :fp3}
     ]
   end
 

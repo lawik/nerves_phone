@@ -2,12 +2,14 @@ defmodule NervesPhone.State.Device do
   @moduledoc """
   Battery, network and volume for the title bar, the hostname, whether the
   screen is on, the display's settings and light reading (both from
-  `NervesPhone.Screen`), and which way up the UI is
-  (`NervesPhone.Orientation`).
+  `Fp3Extras.Screen`), and which way up the UI is
+  (`Fp3Extras.Orientation`). The hardware's reports arrive through
+  `NervesPhone.Hardware`.
 
-  Checked every few seconds: the battery from the fuel gauge in sysfs, the
-  network through `NervesPhone.Net` (both cheap reads). On the host there's
-  no battery, so it reports `config :nerves_phone, :device_status`, if set.
+  Checked every few seconds: the battery from the fuel gauge
+  (`Fp3Extras.Battery`), the network through `NervesPhone.Net` (both cheap
+  reads). On the host there's no battery, so it reports `config
+  :nerves_phone, :device_status`, if set.
   """
 
   use Solve.Controller,
@@ -32,8 +34,8 @@ defmodule NervesPhone.State.Device do
       hostname: DeviceInfo.hostname(),
       screen_on: true,
       display: nil,
-      volume: NervesPhone.Audio.Volume.level(),
-      volume_steps: NervesPhone.Audio.Volume.steps(),
+      volume: Fp3Extras.Volume.level(),
+      volume_steps: Fp3Extras.Volume.steps(),
       # Shown for a moment after the volume buttons change the volume.
       volume_overlay: false,
       volume_overlay_gen: 0,
@@ -57,7 +59,7 @@ defmodule NervesPhone.State.Device do
   # A tap on the dark screen's touch catcher (on the host, where there's no
   # touchscreen reader).
   def wake(_payload, state) do
-    NervesPhone.Screen.touch()
+    Fp3Extras.Screen.touch()
     state
   end
 
@@ -72,14 +74,14 @@ defmodule NervesPhone.State.Device do
   end
 
   def handle_info(:fetch_display, state) do
-    if GenServer.whereis(NervesPhone.Screen),
-      do: %{state | display: NervesPhone.Screen.display()},
+    if GenServer.whereis(Fp3Extras.Screen),
+      do: %{state | display: Fp3Extras.Screen.display()},
       else: state
   end
 
   def handle_info(:fetch_orientation, state) do
-    if GenServer.whereis(NervesPhone.Orientation),
-      do: %{state | orientation: NervesPhone.Orientation.current()},
+    if GenServer.whereis(Fp3Extras.Orientation),
+      do: %{state | orientation: Fp3Extras.Orientation.current()},
       else: state
   end
 
@@ -88,17 +90,15 @@ defmodule NervesPhone.State.Device do
   if Mix.target() == :host do
     defp battery, do: Application.get_env(:nerves_phone, :device_status, %{})[:battery]
   else
-    # The FP3's fuel gauge.
+    # The FP3's fuel gauge. Its level is the boot-time estimate (see
+    # Fp3Extras.Battery), which is what there is.
     defp battery do
-      with [dir | _] <- Path.wildcard("/sys/class/power_supply/qg-battery*"),
-           {:ok, capacity} <- File.read(Path.join(dir, "capacity")),
-           {level, _} <- Integer.parse(capacity) do
-        status =
-          Path.join(dir, "status") |> File.read() |> elem(1) |> to_string() |> String.trim()
+      case Fp3Extras.Battery.read() do
+        %{level: level, charging: charging} when is_integer(level) ->
+          %{level: level, charging: charging}
 
-        %{level: level, charging: status in ["Charging", "Full"]}
-      else
-        _ -> nil
+        _ ->
+          nil
       end
     end
   end

@@ -20,8 +20,13 @@ config :nerves_runtime,
        "a.nerves_fw_version" => "0.0.0"
      }}
 
-# The phone's own files, kept in the project.
+# The phone's own files, and fp3_extras's, kept in the project.
 config :nerves_phone, state_dir: Path.expand("../tmp/phone", __DIR__)
+config :fp3_extras, state_dir: Path.expand("../tmp/phone", __DIR__)
+
+# fp3_extras brings ex_audio and ex_remoteproc along; there's no ADSP to
+# kick here.
+config :ex_remoteproc, start: []
 
 # There's no battery on the host; show a sample one so the title bar can be
 # worked on. The network is NervesPhone.Net's in-memory stand-in.
@@ -42,6 +47,7 @@ config :nerves_phone, :display, dim_after_ms: nil, off_after_ms: nil
 if config_env() == :test do
   config :nerves_phone, start_ui: false
   config :nerves_phone, state_dir: Path.expand("../tmp/test", __DIR__)
+  config :fp3_extras, state_dir: Path.expand("../tmp/test", __DIR__)
   config :nerves_phone, :videos, roots: [Path.expand("../tmp/test/videos", __DIR__)]
   # Queued things wait rather than download.
   config :nerves_phone, :download_queue, run: false

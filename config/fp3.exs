@@ -41,25 +41,20 @@ config :nerves_phone, :viewport,
 # Scale the UI for the panel's ~430 dpi.
 config :nerves_phone, ui_scale: 2.5
 
-# The display until it's changed in Settings (then it's saved in
-# state_dir/display.json): dim after 30 s without touches, black after 1 min.
+# The display until it's changed in Settings (then Fp3Extras.Screen saves it
+# in state_dir/display.json): dim after 30 s without touches, black after
+# 1 min.
 config :nerves_phone, :display,
   brightness: 60,
   auto: false,
   dim_after_ms: 30_000,
   off_after_ms: 60_000
 
-# The accelerometer is mounted turned a quarter from the screen: held
-# upright, its x reads +9.8 m/s^2. These map it to the screen's axes for
-# NervesPhone.Orientation.
-config :nerves_phone, :orientation, axes: [x: {:y, 1}, y: {:x, 1}]
-
-# The phone's own files, such as the Wi-Fi settings kept while Wi-Fi is off.
+# The phone's own files, such as the Wi-Fi settings kept while Wi-Fi is off,
+# and fp3_extras's (the volume, display and orientation settings, the mic
+# device). rootfs_overlay/etc/asound.conf loads asound.mic.conf from here.
 config :nerves_phone, state_dir: "/data/phone"
-
-# The volume buttons drive ALSA's softvol "Master"
-# (rootfs_overlay/etc/asound.conf).
-config :nerves_phone, volume_control: :alsa
+config :fp3_extras, state_dir: "/data/phone"
 
 # Use shoehorn to start the main application. nerves_ai runs the
 # first-boot F2FS resize (which briefly unmounts /root) before the app
@@ -218,7 +213,7 @@ config :mdns_lite,
 # noise reference). Capture (hw:0,1, MultiMedia2) comes from SLIMBUS_0_TX,
 # fed by the codec's SLIM TX ports; this routes the bottom mic through
 # decimator 7 to TX7, so recording is mono by default. The top mic stays
-# off until NervesPhone.Audio.Mic.set_secondary(true) adds it on TX8 as a
+# off until Fp3Extras.Mic.set_secondary(true) adds it on TX8 as a
 # second channel; see that module.
 config :ex_audio,
   card: 0,
@@ -232,11 +227,10 @@ config :ex_audio,
     {"AIF1_CAP Mixer SLIM TX7", :on}
   ]
 
-# NervesPhone.Audio.Mic switches the top mic with amixer. Two-channel
-# capture records silence on nerves_system_fp3 v0.2.4 and a channel
-# mismatch crashes the kernel, so switching the top mic on is refused until
-# `mic_secondary: :experimental` is set here; see the module doc.
-config :nerves_phone, mic_control: :alsa
+# Fp3Extras.Mic switches the top mic through ex_audio. Two-channel capture
+# records silence on nerves_system_fp3 v0.2.4 and a channel mismatch crashes
+# the kernel, so switching the top mic on is refused until Fp3Extras.Mic is
+# started with `experimental: true` (in NervesPhone.Application).
 
 # Bluetooth LE through the kernel's hci0 (the WCN3680 behind btqcomsmd).
 # BlueHeron takes the controller over exclusively, so bluetoothd must not

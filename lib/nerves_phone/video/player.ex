@@ -232,7 +232,7 @@ defmodule NervesPhone.Video.Player do
       end
 
       def handle_info(:reapply_volume, _ctx, state) do
-        NervesPhone.Audio.Volume.reapply()
+        Fp3Extras.Volume.reapply()
         {[], state}
       end
 
