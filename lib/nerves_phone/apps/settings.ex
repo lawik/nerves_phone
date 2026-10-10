@@ -522,8 +522,13 @@ defmodule NervesPhone.Apps.Settings do
     )
   end
 
+  # Short, so six choices fit on one row (a wrapped row doesn't grow).
   defp duration(nil), do: "Never"
   defp duration(ms) when ms < 60_000, do: "#{div(ms, 1000)} s"
+
+  defp duration(ms) when ms >= 3_600_000 and rem(ms, 3_600_000) == 0,
+    do: "#{div(ms, 3_600_000)} h"
+
   defp duration(ms), do: "#{div(ms, 60_000)} min"
 
   defp light_error(:no_camera), do: "no camera"
