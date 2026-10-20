@@ -79,7 +79,7 @@ defmodule NervesPhone.MixProject do
 
       # UI: Emerge renders the declarative UI (DRM/OpenGL on the phone, a
       # window on the host) and Solve holds the application state.
-      {:emerge, "~> 0.4.2"},
+      {:emerge, github: "lawik/emerge", branch: "home-m8-forwarding", override: true},
       {:solve, "~> 0.3.1"},
 
       # SVT Play's API (NervesPhone.SvtPlay.Catalog).
@@ -97,7 +97,7 @@ defmodule NervesPhone.MixProject do
       # the Venus hardware decoder, AAC, and frames to Emerge.
       {:membrane_file_plugin, "~> 0.17.5"},
       {:membrane_mp4_plugin, "~> 0.36.10"},
-      {:membrane_h26x_plugin, "~> 0.11.2", targets: @all_targets},
+      {:membrane_h26x_plugin, "~> 0.11.2"},
       {:membrane_aac_plugin, "~> 0.19.4", targets: @all_targets},
       {:membrane_aac_fdk_plugin, "~> 0.19.0", targets: @all_targets},
       {:membrane_video_interop, "~> 0.1.1", targets: @all_targets},
@@ -125,8 +125,9 @@ defmodule NervesPhone.MixProject do
       # Touchscreen and buttons (Linux input events)
       {:input_event, "~> 1.4", targets: @all_targets},
 
-      # GPIO lines (used by Fp3Extras.Fingerprint)
+      # GPIO lines and SPI (used by Fp3Extras.Fingerprint)
       {:circuits_gpio, "~> 2.3", targets: @all_targets},
+      {:circuits_spi, "~> 2.2", targets: @all_targets},
 
       # The phone's hardware (backlight and screen timeouts, volume, buttons,
       # orientation, the camera as a light sensor, the mics, battery,
@@ -162,7 +163,12 @@ defmodule NervesPhone.MixProject do
       # ---------------- The Nerves system ----------------
       # The prebuilt system comes from the tag's GitHub release.
       {:nerves_system_fp3,
-       github: "mlainez/nerves_system_fp3", tag: "v0.3.0", runtime: false, targets: :fp3}
+       github: "mlainez/nerves_system_fp3", tag: "v0.3.0", runtime: false, targets: :fp3},
+
+      # The home cluster (the Home Video app). Not started at boot: it keys
+      # its :pg groups on node(), so NervesPhone.Home starts it once the
+      # phone is a distribution node. The release only loads it.
+      {:home_base, path: "../home_base", runtime: false}
     ]
   end
 
@@ -172,6 +178,7 @@ defmodule NervesPhone.MixProject do
       # Erlang distribution is not started automatically.
       # See https://nerves-pack.hexdocs.pm/readme.html#erlang-distribution
       cookie: "#{@app}_cookie",
+      applications: [home_base: :load],
       include_erts: &Nerves.Release.erts/0,
       steps: [
         &Nerves.Release.init/1,

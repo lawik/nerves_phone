@@ -23,6 +23,7 @@ config :nerves_phone,
   apps: [
     NervesPhone.Apps.Videos,
     NervesPhone.Apps.Flashcards,
+    NervesPhone.Apps.HomeVideo,
     NervesPhone.Apps.Settings
   ]
 

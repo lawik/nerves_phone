@@ -29,29 +29,42 @@ defmodule NervesPhone.UI do
 
   @app NervesPhone.State
 
+  # The panel in points, portrait.
+  @portrait {432, 864}
+
   @impl Viewport
   def mount(opts) do
-    defaults =
-      [
-        title: "Nerves Phone",
-        width: 432,
-        height: 864,
+    opts = Keyword.merge(Application.get_env(:nerves_phone, :viewport, []), opts)
+
+    config = %Emerge.Config{
+      output: output(Keyword.get(opts, :output, :window)),
+      renderer: Keyword.get(opts, :renderer, []),
+      input: Keyword.get(opts, :input, []),
+      assets: [
         otp_app: :nerves_phone,
-        assets: [
-          fonts: fonts(),
-          # Video thumbnails, next to the videos, and the pictures on
-          # flash cards.
-          runtime_paths: [
-            enabled: true,
-            allowlist:
-              NervesPhone.Video.Library.roots() ++ [NervesPhone.Flashcards.Library.cache_dir()]
-          ]
+        fonts: fonts(),
+        # Video thumbnails, next to the videos, and the pictures on
+        # flash cards.
+        runtime_paths: [
+          enabled: true,
+          allowlist:
+            NervesPhone.Video.Library.roots() ++ [NervesPhone.Flashcards.Library.cache_dir()]
         ]
       ]
-      |> Keyword.merge(Application.get_env(:nerves_phone, :viewport, []))
+    }
 
-    {:ok, %{}, Keyword.merge(defaults, opts)}
+    {:ok, %{}, config}
   end
+
+  # Where it draws, from `config :nerves_phone, :viewport, output: ...` or
+  # start_link's options: a window on the host, `{:drm, fields}` on the
+  # phone, `{:headless, fields}` in tests. Config files are read before
+  # Emerge is compiled, so they can't name its structs.
+  defp output(:window), do: %Emerge.Config.Window{title: "Nerves Phone", size: @portrait}
+  defp output({:drm, fields}), do: struct!(Emerge.Config.DRM, fields)
+
+  defp output({:headless, fields}),
+    do: struct!(Emerge.Config.Headless, Keyword.put_new(fields, :size, @portrait))
 
   @impl Viewport
   def render(_state) do
@@ -74,8 +87,6 @@ defmodule NervesPhone.UI do
   # it's laid out 864x432 and turned a quarter, with a layout-aware
   # rotation, so touches land where things are drawn. Apps that lay out
   # with fill() fit either way.
-  @portrait {432, 864}
-
   defp oriented(:portrait, screen), do: screen
 
   defp oriented(side, screen) do

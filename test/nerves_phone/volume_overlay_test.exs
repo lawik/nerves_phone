@@ -30,8 +30,7 @@ defmodule NervesPhone.VolumeOverlayTest do
   test "renders over the home screen and a full-screen app" do
     viewport =
       start_supervised!(
-        {NervesPhone.UI,
-         backend: :headless, rendering_api: :raster, headless: [mode: :binary, target: self()]}
+        {NervesPhone.UI, output: {:headless, target: self()}, renderer: [api: :raster]}
       )
 
     assert_receive {:emerge_skia_frame, _frame}, 5_000

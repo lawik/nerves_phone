@@ -22,11 +22,9 @@ config :emerge, compiled_backends: [drm: [:opengl]]
 # The renderer cache is off: Emerge 0.4.2's DRM presenter can skip a scene
 # that arrives while an older one is staged behind a page flip.
 config :nerves_phone, :viewport,
-  backend: :drm,
-  drm_card: "/dev/dri/card0",
-  hw_cursor: false,
-  rendering_api: :opengl,
-  renderer_cache: [enabled: false]
+  output: {:drm, card: "/dev/dri/card0"},
+  renderer: [api: :opengl, cache: [enabled: false]],
+  input: [cursor: [hardware: false]]
 
 # Scale the UI for the panel's ~430 dpi.
 config :nerves_phone, ui_scale: 2.5
@@ -224,3 +222,50 @@ config :blue_heron,
   transport: [type: :hci_socket, device: 0],
   # Pair without a passkey: nothing on the phone shows one to the user.
   smp: [io_capability: :no_input_no_output]
+
+# The home cluster (home_base) for the Home Video app; NervesPhone.Home
+# starts it once the phone is a distribution node. The phones can't look
+# up each other's .local names, so their addresses are given. The host
+# with the camera is a home_base node named after its address, e.g.
+#
+#   mix home.node camera.exs --name home --host 192.168.4.148 \
+#     --cookie home_cluster_cookie --backend static \
+#     --peers nerves_phone@nerves-6a3a.local,nerves_phone@nerves-a835.local
+config :nerves_phone, :home,
+  cookie: :home_cluster_cookie,
+  interface: "wlan0",
+  peers: [
+    {:"nerves_phone@nerves-6a3a.local", "192.168.4.135"},
+    {:"nerves_phone@nerves-a835.local", "192.168.4.122"},
+    {:"home@192.168.4.148", nil}
+  ]
+
+# The phone's screen takes video sessions (NervesPhone.HomeVideo.Display),
+# and its cameras send H.264 from the hardware encoder, opened only while
+# a session holds them (NervesPhone.HomeVideo.Camera).
+config :home_base,
+  capabilities: [
+    %{
+      id: "rear",
+      kind: :video_in,
+      availability: :on_request,
+      adapter: {NervesPhone.HomeVideo.Camera, camera: :rear}
+    },
+    %{
+      id: "front",
+      kind: :video_in,
+      availability: :on_request,
+      adapter: {NervesPhone.HomeVideo.Camera, camera: :front}
+    },
+    %{
+      id: "phone_video",
+      kind: :display,
+      adapter: NervesPhone.HomeVideo.Display,
+      meta: %{w: 1080, h: 2160, touch: false}
+    }
+  ],
+  data_dir: "/data/home",
+  media: [ports: 50_000..50_099],
+  # Video from the cluster is decoded by Venus, the hardware decoder, into
+  # frames the UI draws without a copy.
+  video: [decoder: Membrane.V4L2.H264.Decoder]

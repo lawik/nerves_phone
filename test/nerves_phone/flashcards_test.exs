@@ -348,8 +348,7 @@ defmodule NervesPhone.FlashcardsTest do
     test "renders the decks, opening one, questions, answers and done" do
       viewport =
         start_supervised!(
-          {NervesPhone.UI,
-           backend: :headless, rendering_api: :raster, headless: [mode: :binary, target: self()]}
+          {NervesPhone.UI, output: {:headless, target: self()}, renderer: [api: :raster]}
         )
 
       assert_receive {:emerge_skia_frame, _frame}, 5_000

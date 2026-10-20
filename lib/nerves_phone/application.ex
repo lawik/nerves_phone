@@ -24,7 +24,11 @@ defmodule NervesPhone.Application do
         NervesPhone.Downloads,
         NervesPhone.SvtPlay,
         # What phone_remote has queued to download.
-        NervesPhone.DownloadQueue
+        NervesPhone.DownloadQueue,
+        # Video from the home cluster: where it lands, and a camera sent
+        # to every phone (the Home Video app).
+        NervesPhone.HomeVideo.Surface,
+        NervesPhone.HomeVideo.Broadcast
       ] ++
         target_children() ++
         [
@@ -85,7 +89,12 @@ defmodule NervesPhone.Application do
         # Keeps the phone on the tailnet.
         NervesPhone.Tailscale,
         # epmd, and the phone as a distribution node.
-        NervesPhone.Distribution
+        NervesPhone.Distribution,
+        # The phone's cameras for the home cluster: a feed for each
+        # session that asks for one (NervesPhone.HomeVideo.CameraFeed).
+        {DynamicSupervisor, name: NervesPhone.HomeVideo.Cameras, strategy: :one_for_one},
+        # The home cluster (home_base), once the node is up.
+        NervesPhone.Home
       ]
     end
   end

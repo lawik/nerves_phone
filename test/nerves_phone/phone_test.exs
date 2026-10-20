@@ -35,8 +35,8 @@ defmodule NervesPhone.PhoneTest do
     Solve.dispatch(@app, :shell, :open, Settings)
     wait_for(fn -> Solve.subscribe(@app, :shell).active == Settings end)
 
-    # Settings, never; Videos and Flash Cards, always (they aren't
-    # scheduled).
+    # Settings, never; Videos, Flash Cards and Home Video, always (they
+    # aren't scheduled).
     closed = %{"timezone" => "Etc/UTC", "apps" => %{"NervesPhone.Apps.Settings" => []}}
     Solve.dispatch(@app, :schedule, :changed, closed)
 
@@ -44,7 +44,11 @@ defmodule NervesPhone.PhoneTest do
       shell = Solve.subscribe(@app, :shell)
 
       shell.active == nil and
-        shell.available == [NervesPhone.Apps.Videos, NervesPhone.Apps.Flashcards]
+        shell.available == [
+          NervesPhone.Apps.Videos,
+          NervesPhone.Apps.Flashcards,
+          NervesPhone.Apps.HomeVideo
+        ]
     end)
 
     Solve.dispatch(@app, :shell, :open, Settings)
@@ -190,8 +194,7 @@ defmodule NervesPhone.PhoneTest do
   defp render_every_screen do
     viewport =
       start_supervised!(
-        {NervesPhone.UI,
-         backend: :headless, rendering_api: :raster, headless: [mode: :binary, target: self()]}
+        {NervesPhone.UI, output: {:headless, target: self()}, renderer: [api: :raster]}
       )
 
     assert_receive {:emerge_skia_frame, _frame}, 5_000
