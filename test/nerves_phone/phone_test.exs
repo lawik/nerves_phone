@@ -173,12 +173,12 @@ defmodule NervesPhone.PhoneTest do
     end
 
     test "automatic brightness follows the light" do
-      Application.put_env(:fp3_extras, :light_sensor, host_light: 0.00075)
+      Application.put_env(:fp3_extras, :light_sensor, host_light: 0.03)
       Solve.dispatch(@app, :settings, :display, {:auto, true})
       wait_for(fn -> display().auto and display().light == "Dim" end)
       assert display().level in 25..35
 
-      Application.put_env(:fp3_extras, :light_sensor, host_light: 0.3)
+      Application.put_env(:fp3_extras, :light_sensor, host_light: 1000)
       Solve.dispatch(@app, :settings, :measure_light, nil)
       wait_for(fn -> display().light == "Very bright" and display().level > 90 end)
     end
@@ -219,7 +219,7 @@ defmodule NervesPhone.PhoneTest do
     Solve.dispatch(@app, :settings, :show, :display)
     snapshot(viewport, "6-display")
 
-    Application.put_env(:fp3_extras, :light_sensor, host_light: 0.00075)
+    Application.put_env(:fp3_extras, :light_sensor, host_light: 0.03)
     Solve.dispatch(@app, :settings, :display, {:auto, true})
     wait_for(fn -> display().light != nil end)
     snapshot(viewport, "6-display-auto")

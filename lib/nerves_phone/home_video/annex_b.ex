@@ -9,7 +9,7 @@ defmodule NervesPhone.HomeVideo.AnnexB do
 
   A unit is complete once the next one starts: at an access unit
   delimiter, SPS, PPS or SEI after a picture, or at a picture's first
-  slice (`first_mb_in_slice` 0). `cam-stream`'s Venus encoder writes one
+  slice (`first_mb_in_slice` 0). The phone's Venus encoder writes one
   slice per picture, but several slices work too. The last NAL unit of a
   chunk waits for the next start code.
   """

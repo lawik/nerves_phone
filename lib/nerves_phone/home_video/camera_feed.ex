@@ -3,9 +3,10 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
   One of the phone's cameras as an H.264 feed for home_base's
   `Home.Media.H264Relay`, which sends it on without decoding it.
 
-  The first subscriber starts `cam-stream` (`Fp3Camera.start_stream/2`):
-  the sensor's binned frames, encoded by Venus, the phone's hardware
-  encoder, served on a local TCP port. The feed reads that stream, cuts
+  The first subscriber starts a stream (`Fp3Camera.start_stream/2`): the
+  camera ISP's 1280x720 frames (white balanced, colour and gamma
+  corrected), encoded in place by Venus, the phone's hardware encoder,
+  with a keyframe every second, served on a local TCP port. The feed reads that stream, cuts
   it into access units (`NervesPhone.HomeVideo.AnnexB`) and sends each to
   every subscriber as
 
@@ -31,6 +32,10 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
   # point. At 3 Mbit/s the link lost packets until the call fell apart; at
   # 1 Mbit/s both ran at 30 fps with no loss.
   @bitrate 1_000_000
+  # Venus encodes the ISP's buffers in place at a width that's a multiple
+  # of 128.
+  @width 1280
+  @height 720
   @connect_timeout_ms 10_000
   @connect_retry_ms 200
   # A feed nobody subscribes to in this time exits.
@@ -75,7 +80,7 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
 
   def handle_info(:unused?, state), do: {:noreply, state}
 
-  # Starting cam-stream takes a second or more, longer than the relay's
+  # Starting the stream takes a second or more, longer than the relay's
   # subscribe call waits. If it fails the feed stops, which ends the
   # relays' streams and so the session.
   def handle_info(:start, %{subscribers: subscribers} = state) when subscribers == %{},
@@ -109,7 +114,8 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
   def terminate(_reason, state), do: stop_streaming(state)
 
   defp ensure_streaming(%{socket: nil} = state) do
-    with {:ok, stream} <- Fp3Camera.start_stream(state.camera, bitrate: @bitrate),
+    with {:ok, stream} <-
+           Fp3Camera.start_stream(state.camera, bitrate: @bitrate, width: @width, height: @height),
          {:ok, socket} <- connect(port(stream), deadline()) do
       Logger.info("Camera #{state.camera}: streaming")
 
@@ -140,8 +146,7 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
 
   defp connect(nil, _deadline), do: {:error, :no_stream}
 
-  # cam-stream has bound its socket when start_stream returns, but may
-  # still be setting the sensor up.
+  # The stream's server may still be starting when start_stream returns.
   defp connect(port, deadline) do
     case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: true, nodelay: true], 1_000) do
       {:ok, socket} ->
@@ -157,7 +162,7 @@ defmodule NervesPhone.HomeVideo.CameraFeed do
     end
   end
 
-  # Stopped before the socket closes, so cam-stream isn't respawned for
+  # Stopped before the socket closes, so the stream isn't restarted for
   # the next client.
   defp stop_streaming(state) do
     if state.stream, do: Fp3Camera.stop_stream(state.stream)
